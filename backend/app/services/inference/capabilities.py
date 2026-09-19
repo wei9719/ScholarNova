@@ -48,6 +48,10 @@ def infer_model_capabilities(
         "embeddings": False,
     }
 
+    if provider == "local":
+        capabilities["structured_output"] = None
+        return capabilities
+
     if provider == "custom":
         capabilities.update(
             vision=None,
@@ -101,6 +105,8 @@ def assess_model_for_task(
     values = [capabilities.get(item) for item in requirements]
     if not requirements:
         status = "unknown"
+    elif provider == "local" and task != "assistant":
+        status = "unsupported"
     elif any(value is False for value in values):
         status = "unsupported"
     elif any(value is None for value in values):

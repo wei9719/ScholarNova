@@ -26,7 +26,7 @@ jobs:
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend test
       - run: npm --prefix frontend run build
-      - run: node --test desktop/security.test.cjs desktop/proxy.test.cjs desktop/main.test.cjs
+      - run: node --test desktop/security.test.cjs desktop/proxy.test.cjs desktop/main.test.cjs desktop/local-model.test.cjs
       - run: python -m unittest discover -s scripts/packaging -p "test_*.py"
       - run: pip install -c requirements-lock.txt -e "./backend[dev]"
       - run: python -m pytest backend/tests -q --tb=short

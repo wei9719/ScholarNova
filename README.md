@@ -84,6 +84,7 @@ Open full-size screenshots without expanding long images on this page.
 
 ## Configuration and integrations
 
+- [Optional local text model setup (中文)](docs/local-model.zh-CN.md): an isolated runtime and model copy for Assistant only, not bundled weights or a fully offline workflow. Includes private configuration, resource limits, start/stop controls and rollback; real desktop acceptance must be verified separately.
 - [API application links and setup](docs/API_PROVIDERS.md): GLM, Qwen / Bailian, SiliconFlow, MiMo, SenseNova, OpenAI and Ollama.
 - **Zotero**: start Zotero and enable “Allow other applications on this computer to communicate with Zotero” under Settings → Advanced. Detect the connection and select a collection in ScholarNova. Read access does not prove write permission; use bibliographic export if direct writing is unavailable.
 - **Current-source Zotero sync** verifies the complete personal-library collection path and reads back the saved destination. Metadata is supported; PDF attachments are not guaranteed. Group libraries, ambiguous paths and unconfirmed writes are reported explicitly—do not blindly retry a possibly completed write.

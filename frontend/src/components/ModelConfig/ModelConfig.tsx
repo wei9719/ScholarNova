@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import { modelApi } from '@/api/client'
 import { useLocaleStore } from '@/stores/localeStore'
 import type { LLMProvider, ModelCapabilityProbeResult, ModelCapabilityReport, ModelConfig as ModelConfigType, ModelProbeTask, ModelTestResponse } from '@/api/types'
+import LocalModelServiceControl from './LocalModelServiceControl'
 import './ModelConfig.css'
 
 const providers: { value: LLMProvider; label: string; models: string[]; baseUrl?: string }[] = [
@@ -19,6 +20,15 @@ const providers: { value: LLMProvider; label: string; models: string[]; baseUrl?
   { value: 'sensenova', label: 'SenseNova (商汤)', models: ['sensenova-u1-fast', 'sensenova-6.7-flash-lite', 'sensenova-6.5-pro'], baseUrl: 'https://token.sensenova.cn/v1' },
   { value: 'custom', label: 'Custom (OpenAI Compatible)', models: [] },
 ]
+
+// This text-only service is opt-in for the assistant, never a global or fallback route.
+const localProvider: (typeof providers)[number] = {
+  value: 'local',
+  label: '本机模型（离线文字）',
+  models: ['Qwen2.5-1.5B-Instruct'],
+  baseUrl: 'http://127.0.0.1:8766/v1',
+}
+const assistantProviders = [...providers, localProvider]
 
 const embeddingProviders: { value: LLMProvider; label: string; models: string[]; baseUrl: string }[] = [
   { value: 'ollama', label: 'Ollama（本机，推荐）', models: ['nomic-embed-text', 'mxbai-embed-large', 'bge-m3'], baseUrl: 'http://localhost:11434' },
@@ -71,13 +81,15 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
   const [probing, setProbing] = useState(false)
 
   const taskProvider = currentConfig?.provider || defaultProvider
-  const taskModel = currentConfig?.model_name || defaultModel
+  const isLocal = taskProvider === 'local'
+  const localUnsupported = isLocal && taskKey !== 'assistant'
+  const taskModel = currentConfig?.model_name || (isLocal ? localProvider.models[0] : defaultModel)
   const taskApiKey = currentConfig?.api_key || ''
   const taskBaseUrl = currentConfig?.base_url || ''
-  const p = providerOptions.find((pp) => pp.value === taskProvider)
+  const p = isLocal ? localProvider : providerOptions.find((pp) => pp.value === taskProvider)
   const sameAsDefault = taskProvider === defaultProvider
-  const effectiveApiKey = taskApiKey || (sameAsDefault ? defaultApiKey : '')
-  const effectiveBaseUrl = taskBaseUrl || (sameAsDefault ? defaultBaseUrl : '') || p?.baseUrl || ''
+  const effectiveApiKey = taskApiKey || (!isLocal && sameAsDefault ? defaultApiKey : '')
+  const effectiveBaseUrl = taskBaseUrl || (!isLocal && sameAsDefault ? defaultBaseUrl : '') || p?.baseUrl || ''
 
   useEffect(() => {
     if (!expanded || !taskModel) return
@@ -98,7 +110,7 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
   }, [expanded, taskKey, taskModel, taskProvider])
 
   const runProbe = async () => {
-    if (!taskModel || probing) return
+    if (!taskModel || probing || localUnsupported) return
     if (taskKey === 'diagram' && !window.confirm(
       isZh
         ? '该测试会真实调用一次出图模型，可能产生费用。确定继续吗？'
@@ -154,7 +166,7 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
         <div className="p-3 space-y-2 border-t border-gray-200 dark:border-gray-700">
           {/* 提供商 + 模型 */}
           <div className="flex gap-2">
-            <select value={taskProvider} onChange={(e) => {
+            <select aria-label={`${isZh ? zhLabel : enLabel} ${isZh ? '提供商' : 'provider'}`} value={taskProvider} onChange={(e) => {
               const nextProvider = providerOptions.find((option) => option.value === e.target.value)
               onChange(taskKey, {
                 provider: e.target.value,
@@ -165,6 +177,7 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
               })
             }}
               className="config-select flex-1">
+              {localUnsupported && <option value="local" disabled>{localProvider.label}</option>}
               {providerOptions.map((pp) => <option key={pp.value} value={pp.value}>{pp.label}</option>)}
             </select>
             <input type="text" value={taskModel} onChange={(e) => onChange(taskKey, { model_name: e.target.value, provider: taskProvider, api_key: taskApiKey, base_url: taskBaseUrl })}
@@ -172,19 +185,29 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
           </div>
           {/* API Key */}
           <div>
-            <label className="text-xs text-gray-400 dark:text-gray-500 block mb-0.5">{isZh ? 'API Key（可选，留空用默认）' : 'API Key (optional, uses default if empty)'}</label>
-            <input type="password" value={taskApiKey} onChange={(e) => onChange(taskKey, { api_key: e.target.value, provider: taskProvider, model_name: taskModel, base_url: taskBaseUrl })}
-              placeholder={currentConfig?.api_key_configured ? (isZh ? '已安全保存在本机后端' : 'Saved securely by the local backend') : (isZh ? '留空使用默认' : 'Leave empty for default')} className="config-input text-xs" />
+            <label htmlFor={`${taskKey}-credential`} className="text-xs text-gray-400 dark:text-gray-500 block mb-0.5">{isLocal
+              ? (isZh ? '本机服务凭证（不是云 API Key）' : 'Local service credential (not a cloud API key)')
+              : (isZh ? 'API Key（可选，留空用默认）' : 'API Key (optional, uses default if empty)')}</label>
+            <input id={`${taskKey}-credential`} type="password" autoComplete="off" value={taskApiKey} onChange={(e) => onChange(taskKey, { api_key: e.target.value, provider: taskProvider, model_name: taskModel, base_url: taskBaseUrl })}
+              placeholder={currentConfig?.api_key_configured ? (isZh ? '已安全保存在本机后端' : 'Saved securely by the local backend') : isLocal
+                ? (isZh ? '填写本机推理服务生成的凭证，勿填云平台密钥' : 'Enter the local inference service credential, not a cloud key')
+                : (isZh ? '留空使用默认' : 'Leave empty for default')} className="config-input text-xs" />
           </div>
           {/* Base URL */}
           <div>
-            <label className="text-xs text-gray-400 dark:text-gray-500 block mb-0.5">{isZh ? 'API 地址（可选，留空用默认）' : 'Base URL (optional, uses default if empty)'}</label>
+            <label className="text-xs text-gray-400 dark:text-gray-500 block mb-0.5">{isLocal
+              ? (isZh ? '本机服务地址' : 'Local service URL')
+              : (isZh ? 'API 地址（可选，留空用默认）' : 'Base URL (optional, uses default if empty)')}</label>
             <input type="text" value={taskBaseUrl} onChange={(e) => onChange(taskKey, { base_url: e.target.value, provider: taskProvider, model_name: taskModel, api_key: taskApiKey })}
-              placeholder={isZh ? '留空使用默认' : 'Leave empty for default'} className="config-input text-xs" />
+              placeholder={isLocal ? localProvider.baseUrl : (isZh ? '留空使用默认' : 'Leave empty for default')} className="config-input text-xs" />
           </div>
           <p className="text-xs text-gray-400 dark:text-gray-500">
-            {isZh ? '所有字段留空则使用上方的默认模型配置' : 'Leave all fields empty to use the default model config'}
+            {isLocal
+              ? (isZh ? '需要先配置本机推理服务；不支持视觉、生图、向量；选择本地模型不代表所有流程离线。无云API Key，需要本机服务凭证。留空凭证仅使用已保存的本机凭证，不继承云端密钥。' : 'Set up the local inference service first. Text only: no vision, image generation, or embeddings. Selecting a local model does not make every workflow offline. No cloud API key is needed; use the local service credential. An empty credential uses only a saved local credential, never the cloud key.')
+              : (isZh ? '所有字段留空则使用上方的默认模型配置' : 'Leave all fields empty to use the default model config')}
           </p>
+          {localUnsupported && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{isZh ? '本机模型目前仅支持科研问答智能体，请为此任务选择其他提供商。' : 'Local models currently support only the research assistant. Select another provider for this task.'}</p>}
+          {isLocal && taskKey === 'assistant' && <LocalModelServiceControl isZh={isZh} />}
           <div className={clsx(
             'rounded-lg border px-3 py-2 text-xs',
             capability?.status === 'supported' && 'border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300',
@@ -217,7 +240,7 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
               <button
                 type="button"
                 onClick={runProbe}
-                disabled={probing || !taskModel}
+                disabled={probing || !taskModel || localUnsupported}
                 className="config-btn config-btn-secondary !px-3 !py-1.5"
               >
                 {probing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TestTube className="h-3.5 w-3.5" />}
@@ -262,7 +285,7 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
 export default function ModelConfig({ config, testResult, isTesting, isSaving, onConfigChange, onTest, onSave, fallbackTestResult, isFallbackTesting, onFallbackTest, embeddingTestResult, isEmbeddingTesting, onEmbeddingTest }: ModelConfigProps) {
   const { t, locale } = useLocaleStore()
   const isZh = locale === 'zh'
-  const selectedProvider = providers.find((p) => p.value === config.provider)
+  const selectedProvider = config.provider === 'local' ? localProvider : providers.find((p) => p.value === config.provider)
   const [showTaskModels, setShowTaskModels] = useState(false)
   const fallback = config.fallback || {
     enabled: false,
@@ -297,7 +320,7 @@ export default function ModelConfig({ config, testResult, isTesting, isSaving, o
         {/* Provider */}
         <div className="config-field">
           <label className="config-label">{t('settings.provider')}</label>
-          <select value={config.provider}
+          <select aria-label={t('settings.provider')} value={config.provider}
             onChange={(e) => {
               const newProvider = e.target.value as LLMProvider
               const p = providers.find((pp) => pp.value === newProvider)
@@ -311,8 +334,10 @@ export default function ModelConfig({ config, testResult, isTesting, isSaving, o
               })
             }}
             className="config-select">
+            {config.provider === 'local' && <option value="local" disabled>{localProvider.label}</option>}
             {providers.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
+          {config.provider === 'local' && <p role="alert" className="mt-1 text-xs text-amber-700 dark:text-amber-300">{isZh ? '本机模型不能作为默认模型。请在下方仅为科研问答智能体配置，并将默认提供商改为其他模型。' : 'Local models cannot be the default. Configure them only for the research assistant below and select another default provider.'}</p>}
         </div>
 
         {/* Model */}
@@ -330,7 +355,7 @@ export default function ModelConfig({ config, testResult, isTesting, isSaving, o
         </div>
 
         {/* API Key */}
-        {config.provider !== 'ollama' && (
+        {config.provider !== 'ollama' && config.provider !== 'local' && (
           <div className="config-field">
             <label className="config-label">{t('settings.apiKey')}</label>
             <input type="password" value={config.api_key || ''} onChange={(e) => onConfigChange({ api_key: e.target.value })}
@@ -391,7 +416,7 @@ export default function ModelConfig({ config, testResult, isTesting, isSaving, o
                 desc={isZh ? task.zhDesc : task.enDesc} currentConfig={config.tasks?.[task.key]}
                 defaultProvider={config.provider || 'zhipu'} defaultModel={config.model_name || 'glm-5.2'}
                 defaultApiKey={config.api_key} defaultBaseUrl={config.base_url}
-                providerOptions={providers} onChange={handleTaskChange} />
+                providerOptions={task.key === 'assistant' ? assistantProviders : providers} onChange={handleTaskChange} />
             ))}
           </div>
         )}
@@ -561,7 +586,7 @@ export default function ModelConfig({ config, testResult, isTesting, isSaving, o
 
         {/* Actions */}
         <div className="config-actions">
-          <button onClick={onTest} disabled={isTesting} className="config-btn config-btn-secondary">
+          <button onClick={onTest} disabled={isTesting || config.provider === 'local'} className="config-btn config-btn-secondary">
             {isTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
             {t('settings.testConnection')}
           </button>

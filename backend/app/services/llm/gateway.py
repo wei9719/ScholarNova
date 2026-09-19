@@ -184,6 +184,8 @@ class LLMGateway:
             "sensenova",
             "custom",
         }
+        if self.provider == "local":
+            return await self._chat_local(messages, model, temperature, max_tokens)
         if self.provider in openai_compatible:
             return await self._chat_openai(messages, model, temperature, max_tokens, **kwargs)
         elif self.provider == "anthropic":
@@ -192,6 +194,51 @@ class LLMGateway:
             return await self._chat_ollama(messages, model, temperature, max_tokens, **kwargs)
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
+
+    async def _chat_local(self, messages, model, temperature, max_tokens) -> str:
+        """Call only the authenticated loopback service, never a proxy or cloud fallback."""
+        import httpx
+        from app.core.local_model import (
+            LOCAL_MODEL_URL, LOCAL_MODEL_NAME, LOCAL_MAX_TOKENS,
+            LOCAL_TIMEOUT_SECONDS, validate_local_model_url,
+        )
+
+        base_url = (self._base_url or LOCAL_MODEL_URL).rstrip("/")
+        valid, error = validate_local_model_url(base_url)
+        if not valid:
+            raise ValueError(error)
+        if not self._api_key:
+            raise ValueError("本机模型服务凭证未配置，请先配置独立本机服务，不要填写云 API Key")
+        if any(not isinstance(message.get("content"), str) for message in messages):
+            raise ValueError("本机模型仅接受文字，不支持图片或其他多模态输入")
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False, timeout=LOCAL_TIMEOUT_SECONDS,
+        ) as client:
+            response = await self._invoke_text_request(
+                client.post, url=f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "model": model or self._model_name or LOCAL_MODEL_NAME,
+                    "messages": messages, "temperature": temperature,
+                    "max_tokens": min(max_tokens, LOCAL_MAX_TOKENS), "stream": False,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+        usage = data.get("usage") or {}
+        self._record_usage(
+            prompt_tokens=self._usage_value(usage, "prompt_tokens"),
+            completion_tokens=self._usage_value(usage, "completion_tokens"),
+            total_tokens=self._usage_value(usage, "total_tokens"),
+            usage_reported=bool(usage),
+        )
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise ValueError("本机模型输出达到长度上限，请缩小问题范围后重试")
+        content = choice["message"].get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise EmptyLLMResponseError("本机模型没有返回有效文字")
+        return content
 
     async def test_connection(self) -> dict:
         """

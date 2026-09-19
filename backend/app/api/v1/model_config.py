@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.core.rate_limiter import check_rate_limit
 from app.core.ssrf import validate_base_url
+from app.core.local_model import LOCAL_MODEL_URL, validate_model_endpoint
 from app.schemas.search import (
     EmbeddingModelConfig,
     LLMProviderName,
@@ -64,6 +65,18 @@ def _resolve_probe_profile(request: ModelCapabilityProbeRequest) -> dict:
     task_config = saved_tasks.get(request.task)
     if not isinstance(task_config, dict):
         task_config = {}
+
+    if request.provider == "local":
+        base_url = request.base_url or task_config.get("base_url") or LOCAL_MODEL_URL
+        matching_local_task = (
+            task_config.get("provider") == "local"
+            and (task_config.get("base_url") or LOCAL_MODEL_URL).rstrip("/") == base_url.rstrip("/")
+            and task_config.get("model_name") == request.model_name
+        )
+        return {
+            "provider": "local", "model": request.model_name, "base_url": base_url,
+            "api_key": request.api_key or (task_config.get("api_key") if matching_local_task else None),
+        }
 
     matching_task = str(task_config.get("provider") or saved_provider) == request.provider
     api_key = request.api_key
@@ -135,7 +148,7 @@ async def probe_model_capability(
 
     profile = _resolve_probe_profile(request)
     if profile.get("base_url"):
-        is_valid, error = validate_base_url(profile["base_url"])
+        is_valid, error = validate_model_endpoint(profile["provider"], profile["base_url"])
         if not is_valid:
             raise HTTPException(status_code=400, detail=f"API 地址不安全: {error}")
 
@@ -250,6 +263,19 @@ async def save_model_config(
     from app.config import MODEL_PROFILES, runtime_path, settings
 
     existing_config = _read_saved_config()
+    # The optional small local model is deliberately confined to one text task.
+    if config.provider == "local":
+        raise HTTPException(status_code=400, detail="本机模型目前仅用于智能体文字任务，请保留默认云模型")
+    if ((config.fallback and config.fallback.provider == "local")
+            or (config.embedding and config.embedding.provider == "local")):
+        raise HTTPException(status_code=400, detail="本机文字模型不能作为全局备用或向量模型")
+    for task_name, task_config in (config.tasks or {}).items():
+        if task_config.provider == "local":
+            if task_name != "assistant":
+                raise HTTPException(status_code=400, detail="本机模型目前仅支持智能体文字任务")
+            valid, error = validate_model_endpoint("local", task_config.base_url)
+            if not valid:
+                raise HTTPException(status_code=400, detail=error)
     existing_provider = existing_config.get("provider")
     existing_tasks = existing_config.get("tasks")
     if not isinstance(existing_tasks, dict):
@@ -384,7 +410,7 @@ async def test_embedding_connection(
     if limited:
         return limited
     if request.base_url:
-        is_valid, error = validate_base_url(request.base_url)
+        is_valid, error = validate_model_endpoint(request.provider, request.base_url)
         if not is_valid:
             raise HTTPException(
                 status_code=400,
@@ -448,7 +474,7 @@ async def test_model_connection(
 
     # SSRF 防护：验证 base_url
     if request.base_url:
-        is_valid, error = validate_base_url(request.base_url)
+        is_valid, error = validate_model_endpoint(request.provider, request.base_url)
         if not is_valid:
             raise HTTPException(
                 status_code=400,
@@ -468,9 +494,16 @@ async def test_model_connection(
         if not isinstance(saved_fallback, dict):
             saved_fallback = {}
         api_key = request.api_key
-        if not api_key and request.provider == settings.DEFAULT_LLM_PROVIDER:
+        if request.provider == "local" and not api_key:
+            task = (_read_saved_config().get("tasks") or {}).get("assistant") or {}
+            if (task.get("provider") == "local"
+                    and (task.get("base_url") or LOCAL_MODEL_URL).rstrip("/")
+                    == (request.base_url or LOCAL_MODEL_URL).rstrip("/")
+                    and task.get("model_name") == request.model_name):
+                api_key = task.get("api_key")
+        if not api_key and request.provider != "local" and request.provider == settings.DEFAULT_LLM_PROVIDER:
             api_key = settings.OPENAI_API_KEY
-        elif not api_key and saved_fallback.get("provider") == request.provider:
+        elif not api_key and request.provider != "local" and saved_fallback.get("provider") == request.provider:
             api_key = saved_fallback.get("api_key")
         # 测试连接优先使用该供应商自己的默认地址兜底，避免 base_url 为空时
         # 误用 .env 或其他已保存配置的地址，导致 Key 打到错误的厂商。

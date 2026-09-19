@@ -113,6 +113,7 @@ LLMProviderName = Literal[
     "openai",
     "anthropic",
     "ollama",
+    "local",
     "mimo",
     "deepseek",
     "zhipu",

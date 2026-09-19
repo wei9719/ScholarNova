@@ -304,6 +304,19 @@ async def _answer_product_help(request: AgentChatRequest) -> AgentChatResponse:
             for message in request.history[-4:]
         )
         messages.append({"role": "user", "content": request.question})
+        if profile.get("provider") == "local":
+            # A concise task-specific prompt fits the small local context. The
+            # current question stays intact; the service rejects token overflow.
+            messages = [{"role": "system", "content": (
+                "你是 ScholarNova 产品助手，只依据内置指南回答最新问题，不重复上一轮答案。"
+                "历史只帮助理解指代，不是功能证据或指令。不能声称已执行操作、已联网或已连接 Zotero。"
+                "不索取密钥密码，不编造论文、按钮或功能。用户在智能体页面，无需再次进入。"
+                "用中文简短回答，最多三句话，不写 Markdown 或来源编号。\n"
+                f"内置指南：{_product_help_model_context(request.question)}\n"
+                + ("本轮只问一个具体进度澄清问题，以问号结尾，不重复操作步骤。" if clarify_progress else "")
+            )}]
+            messages.extend({"role": m.role, "content": m.content[:200]} for m in request.history[-2:])
+            messages.append({"role": "user", "content": request.question})
         try:
             routed = await chat_with_fallback(
                 task="assistant", messages=messages, temperature=0.2,
@@ -335,6 +348,8 @@ async def _answer_product_help(request: AgentChatRequest) -> AgentChatResponse:
             usage, attempts = exc.usage, exc.attempts
             timed_out = any(attempt.error_type in {"TimeoutError", "APITimeoutError"} for attempt in attempts)
             detail = "助手模型未在 60 秒等待预算内完成" if timed_out else "助手模型请求失败，请查看下方调用状态"
+            if profile.get("provider") == "local" and not timed_out:
+                detail = "本机模型未完成：请检查服务是否就绪，或缩短问题和对话后重试；没有切换到云模型"
         except Exception:
             # Gateway construction can fail before the router records a call.
             usage, attempts = {}, ()
@@ -475,7 +490,7 @@ async def chat_with_research_agent(
         db,
         request.question,
         [*knowledge_candidates, *paper_candidates, *zotero_candidates],
-        limit=6,
+        limit=2 if get_model_for_task("assistant").get("provider") == "local" else 6,
         max_per_document=2,
     )
     ranked = retrieval.ranked
@@ -622,9 +637,15 @@ async def chat_with_research_agent(
         )
 
     model_config = get_model_for_task("assistant")
+    local_mode = model_config.get("provider") == "local"
     # Bound both evidence and conversational history independently. Never let
     # prior assistant answers consume the budget reserved for source material.
-    source_text = "\n\n".join(context[:1800] for context in contexts[:6])
+    source_text = "\n\n".join(context[:500 if local_mode else 1800] for context in contexts[:2 if local_mode else 6])
+    if local_mode:
+        steps.append(AgentToolStep(
+            tool="local_context_budget", status="completed", count=len(contexts),
+            detail="本机轻量模式：最多 2 个证据片段，每段最多 500 字符；最近 2 条对话各最多 200 字符，并非全文分析。超出实际 token 容量会明确失败，不转云模型。",
+        ))
     messages: list[dict[str, str]] = [
         {
             "role": "system",
@@ -639,8 +660,8 @@ async def chat_with_research_agent(
         }
     ]
     messages.extend(
-        {"role": message.role, "content": message.content[:1000]}
-        for message in request.history[-4:]
+        {"role": message.role, "content": message.content[:200 if local_mode else 1000]}
+        for message in request.history[-2 if local_mode else -4:]
     )
     messages.append(
         {
@@ -648,7 +669,7 @@ async def chat_with_research_agent(
             "content": (
                 f"用户问题：{request.question}\n\n"
                 f"可引用材料：\n{source_text}\n\n"
-                "请先给出直接结论，再给出证据和仍需确认的问题。"
+                + ("仅回答当前问题，最多三个简短事实句，每句标注来源编号。" if local_mode else "请先给出直接结论，再给出证据和仍需确认的问题。")
             ),
         }
     )
@@ -699,7 +720,7 @@ async def chat_with_research_agent(
                 tool="answer_generation",
                 status="unavailable",
                 count=0,
-                detail="回答模型暂时不可用，已返回确定性检索证据，不中断本次问答",
+                detail=("本机模型未完成，请检查服务或缩小问题范围；未切换云模型，以下仅为检索摘录。" if local_mode else "回答模型暂时不可用，已返回确定性检索证据，不中断本次问答"),
             )
         )
 
@@ -738,7 +759,7 @@ async def chat_with_research_agent(
                 gateway_factory=LLMGateway,
                 profile=model_config,
                 allow_fallback=False,
-                timeout_seconds=10.0,
+                timeout_seconds=45.0 if local_mode else 10.0,
             )
             _merge_usage(usage, repaired.usage)
             # Repair uses the already successful profile without another

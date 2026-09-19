@@ -209,6 +209,7 @@ DEFAULT_MODEL_CONFIG = {
 }
 
 PROVIDER_DEFAULTS = {
+    "local": ("http://127.0.0.1:8766/v1", "Qwen2.5-1.5B-Instruct"),
     "openai": ("https://api.openai.com/v1", "gpt-4o-mini"),
     "anthropic": ("https://api.anthropic.com", "claude-3-5-sonnet-20241022"),
     "ollama": ("http://localhost:11434", "qwen2.5:14b"),
@@ -317,7 +318,9 @@ def get_model_for_task(task: str) -> dict:
     # 处理 API Key：如果值是 "ENV" 或空，从 settings 读取
     api_key = profile.get("api_key")
     if not api_key or api_key == "ENV":
-        if provider == "sensenova":
+        if provider == "local":
+            api_key = None  # A local service never inherits a cloud credential.
+        elif provider == "sensenova":
             api_key = settings.SENSENOVA_API_KEY
         elif same_as_default:
             api_key = settings.OPENAI_API_KEY

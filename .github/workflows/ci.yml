@@ -87,7 +87,7 @@ jobs:
 
       - name: Check desktop isolation and version consistency
         run: |
-          node --test desktop/security.test.cjs desktop/proxy.test.cjs desktop/main.test.cjs
+          node --test desktop/security.test.cjs desktop/proxy.test.cjs desktop/main.test.cjs desktop/local-model.test.cjs
           python scripts/packaging/check_version.py
 
   # ---------------------------------------------------------------------------

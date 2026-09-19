@@ -102,6 +102,8 @@ temp/
 
 # Config files with secrets
 backend/model_config.json
+local_model.json
+**/local_model.json
 scholarnova/
 backend/scholarnova/
 backend/model_capability_probes.json

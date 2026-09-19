@@ -1,6 +1,6 @@
 {
   "name": "scholarnova-desktop",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "private": true,
   "description": "ScholarNova desktop packaging for Windows and macOS.",
   "author": "Zhang Weiguo and ScholarNova contributors",
@@ -29,6 +29,8 @@
       "desktop/main.cjs",
       "desktop/security.cjs",
       "desktop/proxy.cjs",
+      "desktop/local-model.cjs",
+      "desktop/preload.cjs",
       "desktop/assets/icon.ico",
       "package.json",
       "desktop/assets/icon.png",
@@ -36,6 +38,11 @@
       "LICENSE"
     ],
     "extraResources": [
+      {
+        "from": "backend/local_inference",
+        "to": "local_inference",
+        "filter": ["**/*.py"]
+      },
       {
         "from": "desktop/release/legal",
         "to": "legal"

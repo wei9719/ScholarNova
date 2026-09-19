@@ -4,6 +4,15 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-09-20
+
+### Added
+
+- Optional local Qwen text inference using an independently provisioned Python runtime and model copy. Only the Assistant task can select this provider; model weights and GPU dependencies are not bundled in the desktop installer.
+- Desktop-only start, stop and status controls for the app-owned local model process. Stopping releases its resources without terminating another application's processes or changing the selected model.
+- Authenticated loopback-only chat transport that bypasses environment proxies, refuses redirects, records real token usage and never silently falls back to a cloud model.
+- Bounded local evidence and history, explicit token overflow errors, single-request concurrency and cooperative cancellation. Local text inference does not make external search or separately enabled cloud embeddings offline.
+
 ### Fixed
 
 - Validate architecture-planner module shapes and label budgets before rendering; invalid plans use the existing explicitly labelled rule fallback without silently truncating modules.
@@ -12,7 +21,7 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 ### Documentation
 
 - Add a plain-language Chinese project and learning handbook covering the actual desktop workflow, RAG, model routing, local Qwen, diagrams, failure handling and hands-on source-reading exercises.
-- Add 48 offline diagram-planner regression cases; all 62 planner/pipeline cases pass. No live image-quality or local-model performance claim is made by these tests. These source changes are not a new desktop installer release.
+- Add 48 offline diagram-planner regression cases; all 62 planner/pipeline cases pass. Offline tests do not establish live image quality; local-model acceptance is recorded separately.
 
 ## [1.2.5] - 2026-09-11
 

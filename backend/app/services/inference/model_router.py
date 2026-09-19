@@ -143,7 +143,8 @@ async def chat_with_fallback(
         and fallback.get("model") == primary.get("model")
         and fallback.get("base_url") == primary.get("base_url")
     )
-    if allow_fallback and task in TEXT_TASKS and fallback.get("enabled") and not same_route:
+    # Local material must not silently leave the machine if its local model fails.
+    if allow_fallback and primary.get("provider") != "local" and task in TEXT_TASKS and fallback.get("enabled") and not same_route:
         routes.append(("fallback", fallback))
 
     attempts: list[ModelAttempt] = []
@@ -164,6 +165,9 @@ async def chat_with_fallback(
                 **_request_options(str(profile.get("provider") or "")),
             )
             timeout = timeout_seconds if timeout_seconds is not None else _route_timeout(task)
+            if profile.get("provider") == "local" and timeout_seconds is None:
+                from app.core.local_model import LOCAL_TIMEOUT_SECONDS
+                timeout = LOCAL_TIMEOUT_SECONDS
             content = (
                 await asyncio.wait_for(request, timeout=timeout)
                 if timeout is not None

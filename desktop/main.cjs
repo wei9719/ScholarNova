@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require('electron')
+const { app, BrowserWindow, dialog, shell, ipcMain } = require('electron')
 const fs = require('fs')
 const http = require('http')
 const net = require('net')
@@ -7,15 +7,58 @@ const { spawn } = require('child_process')
 const { randomBytes } = require('crypto')
 const { safeExternalUrl, resolveStaticPath } = require('./security.cjs')
 const { proxyToBackend } = require('./proxy.cjs')
+const { createLocalModelManager } = require('./local-model.cjs')
 
 let mainWindow = null
 let backendProcess = null
 let staticServer = null
 let isQuitting = false
 let backendRestartCount = 0
+let localModelManager = null
+let localModelStopPending = false
+let localModelStopFinished = false
+let localModelOperation = Promise.resolve()
 const MAX_BACKEND_RESTARTS = 5
 // Never exposed to the renderer or written to the user's settings.
 const backendSessionToken = randomBytes(32).toString('hex')
+
+function localModelStatus() {
+  return localModelManager ? localModelManager.status() : { status: 'stopped' }
+}
+
+function controlLocalModel(action) {
+  // Never overlap two starts or abandon a process whose stop failed.
+  localModelOperation = localModelOperation.then(async () => {
+    if (action === 'stop') {
+      if (localModelManager) await localModelManager.stop()
+      return localModelStatus()
+    }
+    if (isQuitting) return { status: 'stopped' }
+    if (['running', 'starting'].includes(localModelStatus().status)) return localModelStatus()
+    if (localModelManager) {
+      await localModelManager.stop()
+      if (localModelStatus().status === 'error') return localModelStatus()
+    }
+    localModelManager = createLocalModelManager({
+      userData: app.getPath('userData'),
+      serviceRoot: isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'backend'),
+    })
+    await localModelManager.start()
+    return localModelStatus()
+  }).catch(() => ({ status: 'error', message: '本机服务操作失败，请查看服务日志' }))
+  return localModelOperation
+}
+
+function registerLocalModelHandlers() {
+  for (const action of ['status', 'start', 'stop']) {
+    ipcMain.handle(`scholarnova:local-model:${action}`, event => {
+      if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+        return { status: 'error', message: '无法从此窗口控制本机服务' }
+      }
+      return action === 'status' ? localModelStatus() : controlLocalModel(action)
+    })
+  }
+}
 
 const isPackaged = app.isPackaged
 const smokeTest = process.argv.includes('--smoke-test')
@@ -256,6 +299,7 @@ async function createWindow(uiPort) {
     backgroundColor: '#0b1220',
     autoHideMenuBar: true,
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -307,6 +351,8 @@ async function createWindow(uiPort) {
 }
 
 async function bootstrap() {
+  await controlLocalModel('start')
+  if (isQuitting) return
   const backendPort = await getFreePort(18765)
   const uiPort = await getFreePort(18766)
   startBackend(backendPort)
@@ -319,6 +365,7 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
+  registerLocalModelHandlers()
   app.on('second-instance', showMainWindow)
 
   app.whenReady().then(() => {
@@ -335,8 +382,18 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   isQuitting = true
-  if (staticServer) staticServer.close()
+  if (staticServer) { staticServer.close(); staticServer = null }
   if (backendProcess && !backendProcess.killed) backendProcess.kill()
+  if (gotLock && !localModelStopFinished) {
+    event.preventDefault()
+    if (!localModelStopPending) {
+      localModelStopPending = true
+      void controlLocalModel('stop').finally(() => {
+        localModelStopFinished = true
+        app.quit()
+      })
+    }
+  }
 })

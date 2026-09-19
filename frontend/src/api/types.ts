@@ -12,7 +12,7 @@ export type FeedbackType = 'helpful' | 'not_helpful' | 'saved' | 'dismissed'
 
 export type AnalysisType = 'summary' | 'methodology' | 'findings' | 'pros_cons' | 'full'
 
-export type LLMProvider = 'openai' | 'anthropic' | 'ollama' | 'mimo' | 'deepseek' | 'zhipu' | 'qwen' | 'siliconflow' | 'moonshot' | 'sensenova' | 'custom'
+export type LLMProvider = 'openai' | 'anthropic' | 'ollama' | 'local' | 'mimo' | 'deepseek' | 'zhipu' | 'qwen' | 'siliconflow' | 'moonshot' | 'sensenova' | 'custom'
 
 // =============================================================================
 // 请求类型

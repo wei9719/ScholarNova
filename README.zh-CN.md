@@ -100,6 +100,7 @@ Windows 日常使用优先选择 **Setup 安装版**。v1.2.5 便携版调整解
 React + TypeScript 构建界面，Electron 提供桌面外壳，FastAPI 编排本地服务，SQLite 保存数据。多源搜索、PDF 解析、模型路由和检索增强问答分别实现，便于替换提供商与排查问题。
 
 - [源码部署与开发](docs/DEVELOPMENT.zh-CN.md)
+- [项目大白话与开发学习手册](docs/PROJECT_EXPLAINED.zh-CN.md)：从一次实际使用讲清技术、RAG、模型切换、本地千问、出图和源码学习；区分当前实现与后续计划。
 - [Windows / macOS 打包、测试和版本发布](docs/desktop-release.zh-CN.md)
 - [FTI 流水线架构](docs/FTI_PIPELINE_ARCHITECTURE.zh-CN.md) · [产品路线图](docs/AI_APPLICATION_ROADMAP.zh-CN.md)
 - [历史 v1.2.1 改进与验收报告](docs/reports/v1.2.1-consumer-readiness.zh-CN.md) · [版本记录](CHANGELOG.md)

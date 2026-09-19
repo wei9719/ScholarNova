@@ -6,13 +6,14 @@
 - planner：调用 LLM 生成 JSON 规划，失败时回退到启发式布局
 
 降级设计：LLM 不可用时，用启发式布局 + 规则生成的模块兜底，
-保证出图链路永远有合格提示词可用。
+让调用方仍可获得规则建议骨架；这不保证生图成功或忠实复现原文。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from app.services.diagram import prompt_engine as pe
@@ -100,6 +101,52 @@ def _fallback_modules(route_title: str, knowledge_text: str = "") -> List[Dict[s
     return [{"name": n, "desc": d} for n, d in skeleton]
 
 
+def _short_label(value: Any) -> Optional[str]:
+    """只接受短、单行标签；不截断标签，以免把坏规划伪装成可用规划。"""
+    if not isinstance(value, str) or any(char in value for char in "\r\n\t"):
+        return None
+    label = " ".join(value.split())
+    if not label or len(label) > 48 or len(label.split()) > 3:
+        return None
+    # 保留常用术语符号（如 β-VAE、Conv 3×3、Q/K/V），排除提示词/标记语法。
+    if not re.fullmatch(r"[\w .+&()/×-]+", label) or not any(c.isalpha() for c in label):
+        return None
+    if label.upper() in {"COLOR RULES", "FORBIDDEN", "MUST FOLLOW", "ASPECT RATIO", "XXXX"}:
+        return None
+    if re.fullmatch(r"MODULE\s+\d+", label, re.I):
+        return None
+    return label
+
+
+def _normalize_modules(raw: Any, knowledge_text: str) -> Optional[List[Dict[str, Any]]]:
+    """验证形状与出图文字预算；不裁掉无效模块或补造内部结构。"""
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 6:
+        return None
+    modules = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        name = _short_label(item.get("name"))
+        desc = item.get("desc", "")
+        subs = item.get("sub_modules", [])
+        if name is None or not isinstance(desc, str) or len(desc) > 160:
+            return None
+        if any(char in desc for char in "\r\n\t"):
+            return None
+        if not isinstance(subs, list) or len(subs) > 4:
+            return None
+        labels = [_short_label(sub) for sub in subs]
+        if any(label is None for label in labels):
+            return None
+        formula = item.get("formula", "")
+        if not isinstance(formula, str) or not formula.strip() or formula not in knowledge_text:
+            formula = ""
+        elif len(formula) > 60 or any(char in formula for char in "\r\n\t"):
+            return None
+        modules.append({"name": name, "desc": desc.strip(), "sub_modules": labels, "formula": formula})
+    return modules
+
+
 async def plan_modules_with_llm(
     llm_gateway,
     route_title: str,
@@ -142,14 +189,11 @@ async def plan_modules_with_llm(
         if layout not in pe.LAYOUT_PATTERNS:
             logger.warning("Unknown layout from LLM: %r, falling back", layout)
             plan["layout"] = pe.select_layout(route_title, text_analysis, knowledge_text)
-        modules = plan.get("modules")
-        if not isinstance(modules, list) or not modules:
-            plan["modules"] = []
-        for module in plan["modules"]:
-            if isinstance(module, dict) and "formula" in module:
-                formula = module["formula"]
-                if not isinstance(formula, str) or not formula.strip() or formula not in knowledge_text:
-                    module["formula"] = ""
+        modules = _normalize_modules(plan.get("modules"), knowledge_text)
+        if modules is None:
+            logger.warning("LLM diagram plan failed module/label validation; using rule fallback")
+            return None
+        plan["modules"] = modules
         return plan
     except (json.JSONDecodeError, ValueError, AttributeError) as exc:
         logger.warning("LLM diagram planning failed: %s", exc)

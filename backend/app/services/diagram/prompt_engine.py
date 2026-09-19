@@ -32,10 +32,9 @@ LAYOUT_PATTERNS = {
         "name": "Horizontal Pipeline Flow",
         "best_for": "端到端方法 / 系统架构 / 数据流",
         "render": (
-            "Layout: left-to-right pipeline, 4 to 6 labeled rounded stages "
-            "connected by straight arrows. Left side holds data inputs, "
-            "middle holds the core method blocks, right side holds outputs "
-            "and evaluation metrics. Arrows show data flow only."
+            "Layout: left-to-right pipeline of the supplied labeled modules, "
+            "connected in their listed order by straight arrows. Each module "
+            "contains its supplied internal components."
         ),
         "plan_hint": "left-to-right pipeline flow (inputs → core method → outputs)",
     },
@@ -43,10 +42,9 @@ LAYOUT_PATTERNS = {
         "name": "Layered / Multi-tier Structure",
         "best_for": "算法栈 / 框架分层 / 模型内部结构",
         "render": (
-            "Layout: top-to-bottom layered stack. Top holds the overall task "
-            "objective, middle holds method layers (data → model → training → "
-            "evaluation), bottom holds outcomes and downstream tasks. Layers "
-            "are separated by horizontal boundaries with short labels."
+            "Layout: top-to-bottom stack of the supplied modules in their "
+            "listed order. Layers are separated by horizontal boundaries "
+            "with short labels; supplied internal components sit inside their layer."
         ),
         "plan_hint": "top-to-bottom layered stack",
     },
@@ -54,10 +52,9 @@ LAYOUT_PATTERNS = {
         "name": "Radial Hub-and-Spoke",
         "best_for": "核心方法与多数据/多任务交互",
         "render": (
-            "Layout: radial design with a central hub holding the core method, "
-            "3 to 6 supporting modules radiating around it (data, loss, fusion, "
-            "evaluation). Curved arrows connect the center to each spoke; "
-            "each spoke carries one short label."
+            "Layout: radial design with the first supplied module at the "
+            "center and the remaining modules arranged around it. Each module "
+            "carries its supplied label and internal components."
         ),
         "plan_hint": "radial hub-and-spoke with central method",
     },
@@ -65,10 +62,9 @@ LAYOUT_PATTERNS = {
         "name": "Side-by-side Comparison",
         "best_for": "消融实验 / 方法对比 / 基线对照",
         "render": (
-            "Layout: side-by-side comparison panels of equal size, e.g. "
-            "baseline vs proposed variant. Shared input on the left, shared "
-            "metric on the right; the proposed / best variant is highlighted "
-            "with a subtle accent outline."
+            "Layout: side-by-side panels of equal size for the supplied "
+            "modules. Each panel contains its supplied label and internal "
+            "components, with consistent alignment and spacing."
         ),
         "plan_hint": "side-by-side comparison panels",
     },
@@ -115,19 +111,6 @@ RENDER_VISUAL_STYLE = (
     "short English labels only, generous white space between modules."
 )
 
-# 顶刊级深度：鼓励模块内部子结构（多层堆叠/子组件）与公式标注
-RENDER_TOP_TIER_STYLE = (
-    "Top-tier journal depth: mimic high-quality architecture figures in "
-    "NeurIPS / CVPR / Nature-style papers. Every major module may contain its "
-    "own internal structure - e.g. stacked sub-blocks for convolution layers, "
-    "small nested boxes for attention heads, fusion branches or critic/reward "
-    "components, tiny rounded chips for loss and evaluation. Use feedback or "
-    "bidirectional arrows where the method has loops or iterative refinement. "
-    "Keep short mathematical notations minimal and clean (like X, f(.), L, "
-    "Attention(Q,K,V)). The overall composition should feel dense, structured "
-    "and professional - not a simple flat strip of boxes."
-)
-
 # =============================================================================
 # 禁止元素（规划层约束，绝不进入渲染层提示词）
 # =============================================================================
@@ -136,7 +119,7 @@ PLANNING_FORBIDDEN = """HARD RULES for module design:
 - No invented numeric results, fake metrics, or unverified percentages
 - No placeholder text like "MODULE 1", "XXXX", "LEFT SECTION"
 - No tier labels as visible text ("TIER 1", "LEVEL 2")
-- Every module label must be short English (2-3 words max)
+- Every module label must be short English (1-3 words max)
 - No logos, watermarks, or decorative filler
 - Use the provided knowledge items as the ground truth; do not fabricate"""
 
@@ -205,12 +188,12 @@ def build_render_prompt(
             if isinstance(subs, list):
                 subs_list = [
                     str(s) for s in subs if isinstance(s, str) and s.strip()
-                ][:6]
+                ]
             formula = m.get("formula") if isinstance(m, dict) else None
             if subs_list:
-                name = name + " (stacked blocks: " + ", ".join(subs_list) + ")"
-            elif formula and isinstance(formula, str) and formula.strip():
-                name = name + " (notation: " + formula.strip()[:60] + ")"
+                name = name + " (internal components: " + ", ".join(subs_list) + ")"
+            if formula and isinstance(formula, str) and formula.strip():
+                name = name + " (notation: " + formula + ")"
             label_list.append(name)
         if label_list:
             parts.append(
@@ -220,7 +203,6 @@ def build_render_prompt(
 
     parts.append(layout_render + ".")
     parts.append(RENDER_VISUAL_STYLE)
-    parts.append(RENDER_TOP_TIER_STYLE)
     parts.append(RENDER_COLOR_HINT)
 
     return "\n".join(parts)
@@ -253,9 +235,9 @@ Output JSON with this exact schema:
   "layout": "pipeline" | "hierarchy" | "radial" | "comparison",
   "modules": [
     {{
-      "name": "short English label (2-3 words)",
+      "name": "short English label (1-3 words)",
       "desc": "what this module covers, one short phrase",
-      "sub_modules": ["2-4 short internal sub-modules giving this module depth, e.g. stacked layers or components"],
+      "sub_modules": ["up to 4 short internal component labels, only when supported by the knowledge items; otherwise use an empty list"],
       "formula": "exact formula copied from verified knowledge items only; empty string if none"
     }}
   ],
@@ -265,12 +247,15 @@ Output JSON with this exact schema:
 {forbidden_rules}
 
 Additional rules:
-- 4 to 6 modules max
+- 1 to 6 modules; use only as many as the knowledge items support
 - Modules MUST reflect the actual research content from the knowledge items; do not invent
 - No numeric results in labels
-- Every module SHOULD include 2-4 sub_modules describing its internal structure
-  (e.g. a convolution module -> ["Conv 3x3", "BN", "ReLU", "Pooling"]) so the
-  figure has top-tier-journal depth instead of being a flat strip of boxes
+- Module and sub-module labels: one line, 1-3 words, at most 48 characters.
+- desc: one line, at most 160 characters. formula: one line, at most 60 characters.
+- Internal structure is optional. Include only components explicitly supported
+  by the knowledge items; leave sub_modules empty when that detail is absent.
+- Do not add layers, losses, attention blocks, feedback loops or other details
+  merely to make the figure look more complex.
 - Never invent, infer, or complete a formula. Copy it verbatim from the verified knowledge items or leave formula empty.
 - Route analysis is AI-generated planning, not evidence for formulas or established paper facts."""
 
@@ -299,7 +284,7 @@ def build_planning_user_prompt(
 # =============================================================================
 
 QUALITY_CHECKLIST = [
-    "module labels are short English (2-3 words)",
+    "module labels are short English (1-3 words)",
     "no invented numeric results",
     "color coding consistent (navy/teal/gold)",
     "no forbidden placeholder labels",

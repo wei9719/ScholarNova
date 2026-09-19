@@ -4,6 +4,8 @@
 
 # ScholarNova
 
+Chinese developer learning guide: [Understand ScholarNova step by step](docs/PROJECT_EXPLAINED.zh-CN.md), covering the real workflow, terminology, RAG, local Qwen and controlled diagram generation.
+
 A desktop research workspace for individuals: **find papers → read full text → save evidence → ask grounded questions → plan research**. Chinese / English, light / dark themes, and bring-your-own-key model configuration.
 
 ## Download and install

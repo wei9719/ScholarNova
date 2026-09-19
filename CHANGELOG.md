@@ -4,6 +4,16 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### Fixed
+
+- Validate architecture-planner module shapes and label budgets before rendering; invalid plans use the existing explicitly labelled rule fallback without silently truncating modules.
+- Remove default instructions to invent internal attention/reward blocks, formulas and feedback arrows for visual complexity. Preserve source-supported formulas alongside internal components.
+
+### Documentation
+
+- Add a plain-language Chinese project and learning handbook covering the actual desktop workflow, RAG, model routing, local Qwen, diagrams, failure handling and hands-on source-reading exercises.
+- Add 48 offline diagram-planner regression cases; all 62 planner/pipeline cases pass. No live image-quality or local-model performance claim is made by these tests. These source changes are not a new desktop installer release.
+
 ## [1.2.5] - 2026-09-11
 
 ### Fixed

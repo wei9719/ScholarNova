@@ -464,8 +464,15 @@ async def chat_with_research_agent(
     zotero_detail = "用户未启用 Zotero 检索"
 
     if request.use_knowledge:
-        knowledge_candidates = await _knowledge_candidates(db)
-        paper_candidates = await _paper_candidates(db)
+        try:
+            knowledge_candidates = await _knowledge_candidates(db)
+            paper_candidates = await _paper_candidates(db)
+            # Candidates are plain records now. Persist lazy feature backfills
+            # before any Zotero, embedding, or answer-model network wait.
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
     if request.use_zotero:
         try:

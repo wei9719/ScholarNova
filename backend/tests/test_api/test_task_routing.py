@@ -72,7 +72,7 @@ async def test_paper_text_analysis_uses_routed_usage(monkeypatch):
         "paper-1",
         AnalysisRequest(query="What is supported?"),
         object(),
-        object(),
+        SimpleNamespace(commit=AsyncMock()),
     )
 
     assert result.model_completed is True
@@ -132,7 +132,7 @@ async def test_visual_paper_analysis_stays_on_vision_task(monkeypatch):
         "paper-visual",
         AnalysisRequest(query="Read the figure"),
         object(),
-        object(),
+        SimpleNamespace(commit=AsyncMock()),
     )
 
     assert result.model_completed is True

@@ -8,7 +8,7 @@ from typing import Any, List, Optional
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     MAX_SEARCH_RESULTS: int = 500
     DEFAULT_SEARCH_RESULTS: int = 50
     SEARCH_TIMEOUT: int = 120  # 搜索超时（秒）
+    SEARCH_MAX_ACTIVE: int = Field(default=3, ge=1, le=64)
+    SEARCH_MAX_QUEUED: int = Field(default=6, ge=0, le=256)
+    SEARCH_QUEUE_TIMEOUT: float = Field(default=30, gt=0, le=300)
+    AI_MAX_ACTIVE: int = Field(default=4, ge=1, le=64)
+    AI_MAX_QUEUED: int = Field(default=8, ge=0, le=256)
+    AI_QUEUE_TIMEOUT: float = Field(default=2, gt=0, le=60)
 
     # =============================================================================
     # LLM 配置

@@ -5,13 +5,59 @@ PDF 解析器
 支持标题层级识别、参考文献提取、表格和图片描述提取。
 """
 
+import asyncio
 import logging
 import re
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, TypeVar, Union
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+# PyMuPDF does not support multiple threads accessing MuPDF. Every application
+# entry point must use this one dedicated thread, including validation/rendering.
+# https://pymupdf.readthedocs.io/en/latest/recipes-multiprocessing.html
+# This isolates blocking work; it is not parallel PDF processing.
+_PDF_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scholarnova-pdf")
+_PDF_CAPACITY = threading.BoundedSemaphore(1)
+
+
+class PDFBusyError(RuntimeError):
+    """The sole PDF worker is occupied; no unbounded work queue is accepted."""
+
+
+def _submit_pdf_work(function: Callable[..., _T], *args) -> Future[_T]:
+    if not _PDF_CAPACITY.acquire(blocking=False):
+        raise PDFBusyError("PDF 解析服务正忙，请稍后重试")
+    try:
+        future = _PDF_EXECUTOR.submit(function, *args)
+    except BaseException:
+        _PDF_CAPACITY.release()
+        raise
+    # A cancelled asyncio waiter cannot terminate running native PDF work.
+    # Release only when the concurrent Future actually finishes.
+    future.add_done_callback(lambda _future: _PDF_CAPACITY.release())
+    return future
+
+
+async def _await_pdf_work(future: Future[_T]) -> _T:
+    wrapped = asyncio.wrap_future(future)
+    # Consume abandoned exceptions without swallowing errors for active waiters.
+    wrapped.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+    return await asyncio.shield(wrapped)
+
+
+async def run_pdf_work(function: Callable[..., _T], *args) -> _T:
+    """Run on the sole PDF thread; cancellation stops waiting, not native work."""
+    return await _await_pdf_work(_submit_pdf_work(function, *args))
+
+
+def run_pdf_work_sync(function: Callable[..., _T], *args) -> _T:
+    """Compatibility for synchronous callers; async callers use run_pdf_work."""
+    return _submit_pdf_work(function, *args).result()
 
 # 常见学术论文章节标题关键词（不区分大小写匹配）
 _SECTION_PATTERNS: list[tuple[str, int]] = [
@@ -107,7 +153,14 @@ class PDFParser:
 
         Returns:
             ParsedDocument 或 None（解析失败时）
+
+        Raises:
+            PDFBusyError: 解析线程正忙，未提交本次工作。
         """
+        return await run_pdf_work(self._parse_sync, Path(pdf_path))
+
+    def _parse_sync(self, pdf_path: Path) -> Optional[ParsedDocument]:
+        """Open, extract and close in the PDF worker; parser instances are stateless."""
         try:
             import pymupdf
 
@@ -117,8 +170,10 @@ class PDFParser:
                 return None
 
             doc = pymupdf.open(str(pdf_path))
-            result = self._extract_document(doc)
-            doc.close()
+            try:
+                result = self._extract_document(doc)
+            finally:
+                doc.close()
 
             logger.info(
                 f"Parsed PDF: title={result.title!r}, "
@@ -147,6 +202,8 @@ class PDFParser:
 
         import httpx
 
+        tmp_path: Optional[Path] = None
+        worker_owns_file = False
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
@@ -158,20 +215,29 @@ class PDFParser:
                 with tempfile.NamedTemporaryFile(
                     suffix=".pdf", delete=False
                 ) as tmp:
-                    tmp.write(response.content)
                     tmp_path = Path(tmp.name)
+                    tmp.write(response.content)
 
-                # 解析
-                result = await self.parse(tmp_path)
+                # Transfer cleanup to the worker before awaiting. Cancellation
+                # must not unlink a PDF while MuPDF still has it open on Windows.
+                future = _submit_pdf_work(self._parse_temporary, tmp_path)
+                worker_owns_file = True
+                return await _await_pdf_work(future)
 
-                # 清理临时文件
-                tmp_path.unlink(missing_ok=True)
-
-                return result
-
+        except PDFBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error downloading PDF from {url}: {e}")
             return None
+        finally:
+            if tmp_path is not None and not worker_owns_file:
+                tmp_path.unlink(missing_ok=True)
+
+    def _parse_temporary(self, pdf_path: Path) -> Optional[ParsedDocument]:
+        try:
+            return self._parse_sync(pdf_path)
+        finally:
+            pdf_path.unlink(missing_ok=True)
 
     async def extract_text(self, pdf_path: Union[str, Path]) -> Optional[str]:
         """

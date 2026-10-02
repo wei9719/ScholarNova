@@ -6,7 +6,7 @@ import asyncio
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +27,7 @@ async def _check_redis() -> str:
         cache = CacheManager()
         client = await cache._get_client()
         await asyncio.wait_for(client.ping(), timeout=2.0)
-        return "connected"
+        return "memory" if cache._use_memory else "connected"
     except Exception:
         return "disconnected"
 
@@ -92,7 +92,7 @@ async def _probe_semantic_scholar() -> tuple[str, str]:
 
 
 @router.get("/health/live")
-async def liveness_check(db: AsyncSession = Depends(get_db)) -> dict:
+async def liveness_check(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     """Lightweight local liveness check for desktop/startup probes."""
     try:
         await db.execute(text("SELECT 1"))
@@ -105,6 +105,11 @@ async def liveness_check(db: AsyncSession = Depends(get_db)) -> dict:
         "version": __version__,
         "timestamp": datetime.utcnow().isoformat(),
         "services": {"database": database},
+        "capacity": {
+            "scope": "process",
+            "search": request.app.state.search_capacity.snapshot(),
+            "ai": request.app.state.ai_capacity.snapshot(),
+        },
     }
 
 
@@ -172,7 +177,7 @@ async def health_check(
     # 确定整体状态
     critical_services = ["database", "redis"]
     critical_ok = all(
-        services.get(s) in ("connected", "available")
+        services.get(s) in ("connected", "available", "memory")
         for s in critical_services
     )
     llm_ok = services.get("llm") == "available"

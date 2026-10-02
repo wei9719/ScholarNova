@@ -58,9 +58,15 @@ export default function ResearchAssistant() {
   const [zoteroConnected, setZoteroConnected] = useState<boolean | null>(null)
   const [sending, setSending] = useState(false)
   const pendingConversationRef = useRef<string | null>(null)
+  const pendingRequestRef = useRef<AbortController | null>(null)
   const currentConversationPending = sending && pendingConversationRef.current === activeConversation?.id
   const [error, setError] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => () => {
+    pendingRequestRef.current?.abort()
+    pendingRequestRef.current = null
+  }, [])
 
   const copy = useMemo(() => isChinese ? {
     eyebrow: 'ScholarNova Research Copilot',
@@ -206,10 +212,19 @@ export default function ResearchAssistant() {
     if (!cleanQuestion || pendingConversationRef.current || !activeConversation) return
     const conversationId = activeConversation.id
     pendingConversationRef.current = conversationId
+    const controller = new AbortController()
+    pendingRequestRef.current = controller
+    const questionId = options.replaceMessageId || newId()
+    const isCurrentRequest = () => !controller.signal.aborted
+      && pendingRequestRef.current === controller
+      && !!useAssistantStore.getState().conversations.find((conversation) =>
+        conversation.id === conversationId
+        && conversation.messages.some((message) => message.id === questionId)
+      )
     const history: AgentMessage[] = options.history || messages.slice(-6).map(({ role, content }) => ({ role, content }))
     const previousReply = messages.find((message) => message.id === options.replaceMessageId)
     if (!options.replaceMessageId) {
-      appendMessage(conversationId, { id: newId(), role: 'user', content: cleanQuestion })
+      appendMessage(conversationId, { id: questionId, role: 'user', content: cleanQuestion })
       setQuestion('')
     }
     setError('')
@@ -220,7 +235,8 @@ export default function ResearchAssistant() {
         history,
         use_knowledge: useKnowledge,
         use_zotero: useZotero,
-      })
+      }, controller.signal)
+      if (!isCurrentRequest()) return
       const assistantEntry: AssistantMessage = {
         id: options.replaceMessageId || newId(),
         role: 'assistant',
@@ -233,13 +249,17 @@ export default function ResearchAssistant() {
       if (options.replaceMessageId) replaceMessage(conversationId, options.replaceMessageId, assistantEntry)
       else appendMessage(conversationId, assistantEntry)
     } catch (requestError: any) {
+      if (!isCurrentRequest()) return
       setError(
         requestError.response?.data?.detail
         || (isChinese ? '智能体暂时无法回答，请检查模型和 Zotero 设置。' : 'The assistant could not answer. Check model and Zotero settings.')
       )
     } finally {
-      pendingConversationRef.current = null
-      setSending(false)
+      if (pendingRequestRef.current === controller) {
+        pendingRequestRef.current = null
+        pendingConversationRef.current = null
+        setSending(false)
+      }
     }
   }
 

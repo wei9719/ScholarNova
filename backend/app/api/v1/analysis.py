@@ -7,11 +7,14 @@ import base64
 import hashlib
 import logging
 import re
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
+from weakref import WeakValueDictionary
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -19,10 +22,21 @@ from app.models.paper import PaperChunk, PaperEntity
 from app.schemas.query import AnalysisRequest, AnalysisResult
 from app.core.rate_limiter import check_rate_limit
 from app.services.inference import AllModelsUnavailableError, chat_with_fallback
+from app.services.pdf.parser import PDFBusyError, run_pdf_work, run_pdf_work_sync
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 MAX_PDF_UPLOAD_SIZE = 50 * 1024 * 1024
+_paper_preparation_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+
+
+def _paper_preparation_lock(paper_id: str) -> asyncio.Lock:
+    """Serialize one paper's source/index changes, without retaining idle IDs."""
+    lock = _paper_preparation_locks.get(paper_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _paper_preparation_locks[paper_id] = lock
+    return lock
 
 
 def _build_fallback_analysis(paper_info: dict, query: str) -> str:
@@ -179,7 +193,13 @@ def _document_text(parsed) -> str:
 
 
 def _visual_pages(pdf_path, max_pages: int = 3) -> list[str]:
+    """Synchronous compatibility entry point; all MuPDF work stays on its worker."""
+    return run_pdf_work_sync(_render_visual_pages, pdf_path, max_pages)
+
+
+def _render_visual_pages(pdf_path, max_pages: int = 3) -> list[str]:
     """Render figure-bearing PDF pages for vision-capable models."""
+    doc = None
     try:
         import pymupdf
 
@@ -200,11 +220,27 @@ def _visual_pages(pdf_path, max_pages: int = 3) -> list[str]:
             pixmap = doc[index].get_pixmap(matrix=pymupdf.Matrix(0.9, 0.9), alpha=False)
             encoded = base64.b64encode(pixmap.tobytes("jpeg")).decode("ascii")
             images.append(f"data:image/jpeg;base64,{encoded}")
-        doc.close()
         return images
     except Exception:
         logger.warning("PDF visual-page rendering failed", exc_info=True)
         return []
+    finally:
+        if doc is not None:
+            doc.close()
+
+
+def _pdf_page_count(content: bytes) -> int:
+    """Validate upload bytes on the shared PDF thread, without exporting a Document."""
+    import pymupdf
+
+    document = pymupdf.open(stream=content, filetype="pdf")
+    try:
+        page_count = document.page_count
+        if page_count < 1:
+            raise ValueError("PDF 没有页面")
+        return page_count
+    finally:
+        document.close()
 
 
 def _uploaded_pdf_path(paper_id: str):
@@ -258,13 +294,22 @@ async def _load_document_context(
         if not parsed or len((parsed.full_text or "").strip()) < 500:
             return "", [], "abstract", "PDF 可打开，但未提取到足够的正文文字"
         if db is not None:
-            paper = await db.get(PaperEntity, paper_id)
-            if paper is not None:
-                from app.services.features.paper import ensure_paper_features
+            try:
+                paper = await db.get(PaperEntity, paper_id)
+                if paper is not None:
+                    from app.services.features.paper import ensure_paper_features
 
-                await ensure_paper_features(db, paper, parsed)
-        visuals = await asyncio.to_thread(_visual_pages, pdf_path)
-        return _document_text(parsed), visuals, f"fulltext:{source}", None
+                    await ensure_paper_features(db, paper, parsed)
+            except Exception as exc:
+                await db.rollback()
+                logger.warning("Paper feature extraction failed; retaining parsed text", exc_info=True)
+                fetch_error = f"全文已读取，但检索索引生成失败（{type(exc).__name__}）"
+        visuals = await run_pdf_work(_render_visual_pages, pdf_path)
+        return _document_text(parsed), visuals, f"fulltext:{source}", fetch_error
+    except PDFBusyError as exc:
+        raise HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": "1"}
+        ) from exc
     except Exception as exc:
         logger.warning("OA full-text preparation failed; using abstract", exc_info=True)
         fetch_error = f"全文解析失败：{exc}"
@@ -298,6 +343,17 @@ async def upload_fulltext(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Persist a user-provided PDF so the analysis Agent can read its full text."""
+    async with _paper_preparation_lock(paper_id):
+        try:
+            return await _save_fulltext(paper_id, file, db)
+        except BaseException:
+            # Roll back before another operation on this paper can acquire the
+            # lock, including when the request was cancelled during a commit.
+            await db.rollback()
+            raise
+
+
+async def _save_fulltext(paper_id: str, file: UploadFile, db: AsyncSession) -> dict:
     if not await _find_paper_info(paper_id, db):
         raise HTTPException(status_code=404, detail="Paper not found")
     content = await file.read(MAX_PDF_UPLOAD_SIZE + 1)
@@ -308,20 +364,36 @@ async def upload_fulltext(
         raise HTTPException(status_code=400, detail="文件不是有效的 PDF")
 
     try:
-        import pymupdf
-
-        document = pymupdf.open(stream=content, filetype="pdf")
-        page_count = document.page_count
-        document.close()
-        if page_count < 1:
-            raise ValueError("PDF 没有页面")
+        page_count = await run_pdf_work(_pdf_page_count, content)
+    except PDFBusyError as exc:
+        raise HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": "1"}
+        ) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"PDF 无法解析：{exc}") from exc
 
     pdf_path = _uploaded_pdf_path(paper_id)
-    temporary_path = pdf_path.with_suffix(".tmp")
-    temporary_path.write_bytes(content)
-    temporary_path.replace(pdf_path)
+    temporary_path: Path | None = None
+    try:
+        # Each request owns its staged file. Invalidate before publishing: a
+        # failed/cancelled commit must not pair new bytes with the old index.
+        with tempfile.NamedTemporaryFile(
+            dir=pdf_path.parent, prefix=f".{pdf_path.stem}.", suffix=".tmp", delete=False,
+        ) as staged:
+            temporary_path = Path(staged.name)
+            staged.write(content)
+        await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
+        await db.commit()
+        try:
+            temporary_path.replace(pdf_path)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="PDF 替换失败，原文件未更新，检索索引已清除；请重试上传",
+            ) from exc
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     feature_count = 0
     feature_error: str | None = None
     try:
@@ -334,9 +406,17 @@ async def upload_fulltext(
             feature_count = len(await rebuild_paper_features(db, paper, parsed))
         else:
             feature_error = "PDF 已保存，但当前论文记录无法建立检索特征"
+        # The route's dependency commit occurs after this function returns,
+        # which is too late: the per-paper lock must still protect publication.
+        await db.commit()
+    except PDFBusyError:
+        await db.rollback()
+        feature_error = "PDF 已保存，旧索引已清除；解析服务正忙，请稍后重试建立索引"
     except Exception as exc:
+        await db.rollback()
+        feature_count = 0
         logger.warning("Uploaded PDF feature extraction failed", exc_info=True)
-        feature_error = f"PDF 已保存，但检索特征生成失败：{exc}"
+        feature_error = f"PDF 已保存，但检索特征生成失败（{type(exc).__name__}）"
     return {
         "available": True,
         "source": "uploaded",
@@ -360,14 +440,22 @@ async def analyze_paper(
     if rate_limit_response:
         return rate_limit_response
 
-    # 获取论文（数据库 + 缓存 fallback）
-    paper_info = await _find_paper_info(paper_id, db)
-    if not paper_info:
-        raise HTTPException(status_code=404, detail="Paper not found")
+    async with _paper_preparation_lock(paper_id):
+        try:
+            # 获取论文（数据库 + 缓存 fallback）
+            paper_info = await _find_paper_info(paper_id, db)
+            if not paper_info:
+                raise HTTPException(status_code=404, detail="Paper not found")
 
-    document_text, visual_pages, coverage, document_error = await _load_document_context(
-        paper_id, paper_info, db
-    )
+            document_text, visual_pages, coverage, document_error = await _load_document_context(
+                paper_id, paper_info, db
+            )
+            # Commit while still holding the source/index lock, before model
+            # waiting. A failed commit must not start a model request.
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
     paper_text = f"""
 Title: {paper_info['title']}
 Authors: {paper_info['authors']}

@@ -4,6 +4,21 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.7 source — concurrency and task reliability
+
+- Bound active searches and their waiting queue, enforce a search execution deadline, and reclaim child requests on cancellation/shutdown. Keep completed/failed results terminal.
+- Add single-process admission for expensive AI endpoints, explicit 429/Retry-After responses before execution, search queue status, and local health capacity counters. This is not a distributed provider quota.
+- Fix Redis initialization and share its connection pool; use bounded TTL/LRU memory fallback on failure. Close shared cache only at application shutdown.
+- Run all application MuPDF operations on one bounded worker thread. Cancelled waiters do not prematurely release native work capacity. Close documents and clean temporary downloads on failure.
+- Close task-scoped model clients on success as well as failure. Ignore untrusted forwarded headers when identifying rate-limit clients.
+- Isolate embedding cache transactions, tolerate duplicate inserts and bounded lock contention without invalidating the user's session or discarding completed embedding usage.
+- Commit material preparation before model waiting; serialize source/index changes per paper so an older analysis cannot restore stale features after a PDF replacement. Failed index rebuilds retain the saved PDF and report the incomplete state.
+- Cap distinct child retrieval tasks per round and distinguish local capacity truncation from actual provider API calls.
+- Guard conversation and paper-analysis writes by request identity; abort obsolete browser requests and preserve per-paper results only within the current search.
+- Add offline admission benchmarks, file-backed database race tests, and an official-source comparison of 13 related products/projects. No paid API load test or multi-user capacity claim is made.
+
+See [validation, limits and manual checks](docs/reports/v1.2.7-concurrency.zh-CN.md). Local-model loading remains paused; no LLM-Twin files or user credentials are changed.
+
 ## [1.2.6] - 2026-09-20
 
 ### Added

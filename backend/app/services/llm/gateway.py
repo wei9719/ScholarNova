@@ -321,7 +321,7 @@ class LLMGateway:
         for attempt in range(max_retries + 1):
             try:
                 # 每次重试重建客户端，避免状态异常
-                self._client = None
+                await self._discard_openai_client()
                 content = await asyncio.wait_for(
                     self._chat_openai_once(
                         messages,
@@ -334,6 +334,7 @@ class LLMGateway:
                 )
                 if not content or not content.strip():
                     raise EmptyLLMResponseError("LLM provider returned an empty response")
+                await self._discard_openai_client()
                 return content
             except asyncio.CancelledError:
                 # An outer task deadline cancels this coroutine before the
@@ -503,9 +504,8 @@ class LLMGateway:
 
         try:
             response = await self._invoke_text_request(client.messages.create, **call_kwargs)
-        except asyncio.CancelledError:
+        finally:
             await self._discard_openai_client()
-            raise
         usage = getattr(response, "usage", None)
         self._record_usage(
             prompt_tokens=self._usage_value(usage, "input_tokens", "prompt_tokens"),

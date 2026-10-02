@@ -34,6 +34,7 @@ export default function Search() {
   const lastStartedQueryRef = useRef<string | null>(null)
   const searchStartedAtRef = useRef<number | null>(null)
   const analysisCacheRef = useRef<Map<string, AnalysisResult>>(new Map())
+  const analysisRequestsRef = useRef<Map<string, AbortController>>(new Map())
   const selectedPaperIdRef = useRef<string | null>(selectedPaper?.id || null)
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
@@ -49,11 +50,14 @@ export default function Search() {
   // A late request must never repopulate a closed or replaced search session.
   useEffect(() => {
     const cache = analysisCacheRef.current
+    const requests = analysisRequestsRef.current
     return () => {
       generationRef.current++
       selectionRef.current++
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
       cache.clear()
+      requests.forEach((request) => request.abort())
+      requests.clear()
       clearSearch()
       lastStartedQueryRef.current = null
     }
@@ -130,6 +134,8 @@ export default function Search() {
     setAnalysis(null)
     setEvidenceSpans([])
     analysisCacheRef.current.clear()
+    analysisRequestsRef.current.forEach((request) => request.abort())
+    analysisRequestsRef.current.clear()
     searchStartedAtRef.current = Date.now()
     setElapsedMs(0)
 
@@ -154,7 +160,7 @@ export default function Search() {
         if (response.data.status === 'completed' || response.data.status === 'failed') {
           setIsLoading(false)
           if (response.data.status !== 'completed') {
-            setError('搜索失败，请换个关键词试试')
+            setError(response.data.progress?.message || '搜索失败，请稍后重试或调整数据源')
           }
           return
         }
@@ -182,52 +188,78 @@ export default function Search() {
     const selection = ++selectionRef.current
     const generation = generationRef.current
     selectedPaperIdRef.current = paper.id
-    setAnalysis(analysisCacheRef.current.get(paper.id) || null)
+    // Keep the old paper and its analysis together until the new details arrive.
     setEvidenceSpans([])
     try {
       const response = await papersApi.get(paper.id)
       if (generation !== generationRef.current || selection !== selectionRef.current) return
       setSelectedPaper(response.data)
+      setAnalysis(analysisCacheRef.current.get(paper.id) || null)
+      setAnalysisLoading(analysisRequestsRef.current.has(paper.id))
     } catch {
       if (generation !== generationRef.current || selection !== selectionRef.current) return
       setSelectedPaper({
         ...paper, references: [], citations: [], fields_of_study: [],
         keywords: [], publication_date: null, volume: null, issue: null, pages: null,
       })
+      setAnalysis(analysisCacheRef.current.get(paper.id) || null)
+      setAnalysisLoading(analysisRequestsRef.current.has(paper.id))
     }
   }, [searchRun?.run_id])
 
   const renderedGeneration = generationRef.current
   const renderedSelection = selectionRef.current
-  const handleAnalyze = useCallback(async (customQuery?: string) => {
+  const handleAnalyze = useCallback(async (customQuery?: string, replacePending = false) => {
     if (!selectedPaper || renderedGeneration !== generationRef.current ||
-        renderedSelection !== selectionRef.current || selectedPaperIdRef.current !== selectedPaper.id) return
+        (!replacePending && renderedSelection !== selectionRef.current) ||
+        selectedPaperIdRef.current !== selectedPaper.id ||
+        useSearchStore.getState().selectedPaper?.id !== selectedPaper.id) return
     const paperId = selectedPaper.id
     const generation = generationRef.current
+    const pending = analysisRequestsRef.current.get(paperId)
+    if (pending && !replacePending) return
+    pending?.abort()
+    const controller = new AbortController()
+    analysisRequestsRef.current.set(paperId, controller)
+    const isCurrentRequest = () => generation === generationRef.current
+      && analysisRequestsRef.current.get(paperId) === controller
+      && !controller.signal.aborted
     setAnalysisLoading(true)
     try {
       const response = await papersApi.analyze(paperId, {
         query: customQuery || query || t('search.placeholder'),
         analysis_type: 'full',
-      })
-      if (generation !== generationRef.current) return
+      }, controller.signal)
+      if (!isCurrentRequest()) return
       analysisCacheRef.current.set(paperId, response.data)
-      if (selectedPaperIdRef.current === paperId) setAnalysis(response.data)
-    } catch {
-      if (generation !== generationRef.current) return
-      toast.error(t('common.error') + '. ' + t('common.retry'))
+      if (selectedPaperIdRef.current === paperId && useSearchStore.getState().selectedPaper?.id === paperId) {
+        setAnalysis(response.data)
+      }
+    } catch (requestError: any) {
+      if (!isCurrentRequest()) return
+      const detail = requestError.response?.data?.detail
+      toast.error(typeof detail === 'string' ? detail : t('common.error') + '. ' + t('common.retry'))
     } finally {
-      if (generation === generationRef.current) setAnalysisLoading(false)
+      if (isCurrentRequest()) {
+        analysisRequestsRef.current.delete(paperId)
+        if (selectedPaperIdRef.current === paperId && useSearchStore.getState().selectedPaper?.id === paperId) {
+          setAnalysisLoading(false)
+        }
+      }
     }
   }, [selectedPaper, query, renderedGeneration, renderedSelection])
 
   const handleFulltextUploaded = useCallback(() => {
-    if (!selectedPaper || renderedGeneration !== generationRef.current ||
-        renderedSelection !== selectionRef.current || selectedPaperIdRef.current !== selectedPaper.id) return
-    analysisCacheRef.current.delete(selectedPaper.id)
+    if (!selectedPaper || renderedGeneration !== generationRef.current) return
+    const paperId = selectedPaper.id
+    // Uploads may finish after this paper's detail panel has been closed or replaced.
+    analysisCacheRef.current.delete(paperId)
+    analysisRequestsRef.current.get(paperId)?.abort()
+    analysisRequestsRef.current.delete(paperId)
+    if (selectedPaperIdRef.current !== paperId || useSearchStore.getState().selectedPaper?.id !== paperId) return
     setAnalysis(null)
-    void handleAnalyze()
-  }, [selectedPaper, handleAnalyze, renderedGeneration, renderedSelection])
+    void handleAnalyze(undefined, true)
+  }, [selectedPaper, handleAnalyze, renderedGeneration])
 
   const beginPanelResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (window.innerWidth < 768) return
@@ -262,6 +294,7 @@ export default function Search() {
   const handleCloseDetail = () => {
     selectionRef.current++
     selectedPaperIdRef.current = null
+    setAnalysisLoading(false)
     setSelectedPaper(null); setAnalysis(null); setEvidenceSpans([])
   }
 
@@ -318,7 +351,8 @@ export default function Search() {
                   <div className="flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin text-primary-600 dark:text-primary-400" />
                     <span className="text-sm font-medium text-primary-700 dark:text-primary-300">
-                      {progress?.current_phase === 'searching' ? '正在并行检索学术 API...' :
+                      {progress?.current_phase === 'queued' ? (locale === 'zh' ? '正在等待检索席位，尚未开始调用数据源...' : 'Waiting for a search slot; sources have not been called yet...') :
+                       progress?.current_phase === 'searching' ? '正在并行检索学术 API...' :
                        progress?.current_phase === 'refining' ? '低召回，正在进行第二轮有界扩展...' :
                        progress?.current_phase === 'deduplicating' ? '正在跨来源去重...' :
                        progress?.current_phase === 'ranking' ? '正在计算相关度与质量排序...' :

@@ -10,7 +10,7 @@ from unittest.mock import Mock
 @pytest.fixture(autouse=True)
 def isolate_search_worker(monkeypatch):
     """Endpoint contract tests must not start a worker against the user's DB/APIs."""
-    worker = Mock()
+    worker = Mock(side_effect=lambda run_id, request, lease: lease.release())
     monkeypatch.setattr("app.api.v1.search._start_search_task", worker)
     return worker
 

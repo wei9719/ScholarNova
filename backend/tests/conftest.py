@@ -46,11 +46,6 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-# 需要在 SQLite 中启用外键支持
-_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
-
-
-@event.listens_for(_engine.sync_engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     """SQLite 连接时启用外键约束"""
     cursor = dbapi_connection.cursor()
@@ -58,27 +53,26 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.close()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def test_engine():
-    """创建 SQLite 内存数据库引擎"""
+    """每例独立数据库，允许被测 API 提交而不污染后续测试。"""
     # Ensure every ORM model is registered on Base.metadata before create_all.
     # Importing Base alone leaves metadata empty when an API test runs first.
     import app.models  # noqa: F401
 
-    async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    yield _engine
-
-    async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-
-    await _engine.dispose()
+    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+    event.listen(engine.sync_engine, "connect", set_sqlite_pragma)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield engine
+    finally:
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture
 async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
-    """创建测试数据库会话，每个测试结束后回滚"""
+    """创建测试数据库会话，清理未提交事务；引擎按测试隔离。"""
     session_factory = async_sessionmaker(
         test_engine, class_=AsyncSession, expire_on_commit=False
     )

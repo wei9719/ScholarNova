@@ -90,8 +90,8 @@ export const papersApi = {
   get: (paperId: string) =>
     api.get<PaperDetail>(`/papers/${paperId}`),
 
-  analyze: (paperId: string, request: AnalysisRequest) =>
-    api.post<AnalysisResult>(`/papers/${paperId}/analyze`, request),
+  analyze: (paperId: string, request: AnalysisRequest, signal?: AbortSignal) =>
+    api.post<AnalysisResult>(`/papers/${paperId}/analyze`, request, { signal }),
 
   fulltextStatus: (paperId: string) =>
     api.get<FulltextStatus>(`/papers/${paperId}/fulltext/status`),
@@ -236,7 +236,7 @@ export const agentApi = {
     history?: AgentMessage[]
     use_knowledge?: boolean
     use_zotero?: boolean
-  }) => api.post<AgentChatResponse>('/agent/chat', data),
+  }, signal?: AbortSignal) => api.post<AgentChatResponse>('/agent/chat', data, { signal }),
 }
 
 // =============================================================================

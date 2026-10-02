@@ -167,6 +167,7 @@ export interface SearchProgress {
   total_papers: number
   deduplicated_papers: number
   current_phase: string
+  message?: string | null
   search_rounds?: number
   api_calls?: number
   latency_ms?: number

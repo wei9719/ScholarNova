@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.evidence import EvidenceSpan
 from app.schemas.paper import Paper
@@ -38,12 +38,19 @@ class SearchRequest(BaseModel):
     max_results: int = Field(50, description="最大返回结果数", ge=1, le=500)
     sources: List[DataSource] = Field(
         default=[DataSource.CROSSREF, DataSource.OPENALEX, DataSource.ZOTERO],
+        max_length=len(DataSource),
         description="指定数据源",
     )
     date_from: Optional[str] = Field(None, description="起始日期 (YYYY-MM-DD)")
     date_to: Optional[str] = Field(None, description="结束日期 (YYYY-MM-DD)")
     min_citations: Optional[int] = Field(None, description="最小引用数", ge=0)
     open_access_only: bool = Field(False, description="仅开放获取论文")
+
+    @field_validator("sources")
+    @classmethod
+    def unique_sources(cls, sources: List[DataSource]) -> List[DataSource]:
+        """Preserve source order without scheduling duplicate upstream calls."""
+        return list(dict.fromkeys(sources))
 
 
 class SearchProgress(BaseModel):
@@ -54,6 +61,7 @@ class SearchProgress(BaseModel):
     total_papers: int = Field(0, description="总论文数")
     deduplicated_papers: int = Field(0, description="去重后论文数")
     current_phase: str = Field("pending", description="当前阶段")
+    message: Optional[str] = Field(None, description="可向用户展示的排队或超时说明")
     search_rounds: int = Field(0, description="实际检索轮次")
     api_calls: int = Field(0, description="学术检索 API 调用次数")
     latency_ms: float = Field(0, description="当前端到端耗时（毫秒）")

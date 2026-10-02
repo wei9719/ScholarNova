@@ -95,32 +95,11 @@ _rate_limiter = RateLimiter()
 
 
 def get_client_ip(request: Request) -> str:
+    """Use the ASGI peer, not spoofable request headers.
+
+    Deployments behind a proxy must configure trusted proxy addresses at the
+    ASGI server. That server, not this application, resolves forwarded headers.
     """
-    获取客户端真实 IP 地址
-
-    优先从 X-Forwarded-For 头获取（反向代理场景），
-    否则使用 request.client.host。
-
-    Args:
-        request: FastAPI 请求对象
-
-    Returns:
-        客户端 IP 地址
-    """
-    # 检查反向代理头
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # 取第一个 IP（最原始的客户端 IP）
-        ip = forwarded_for.split(",")[0].strip()
-        if ip:
-            return ip
-
-    # 检查 X-Real-IP 头
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip.strip()
-
-    # 使用直接连接的 IP
     if request.client:
         return request.client.host
 

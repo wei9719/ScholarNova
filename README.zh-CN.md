@@ -6,6 +6,8 @@
 
 一个面向个人研究者的桌面科研工作台：**找论文 → 读全文 → 存知识 → 基于证据问答 → 规划研究路线**。支持中文 / English、明暗主题和自带模型 API Key（BYOK）。
 
+**当前源码：1.2.7，尚未发布安装包。** 本轮优先改善多任务使用体验：限制同时运行和排队的重任务，修复迟到回答、PDF 阻塞和缓存冲突。已发布下载仍以 Release 附件为准，不会自动更新你已安装的软件。详见 [本轮验证与使用测试](docs/reports/v1.2.7-concurrency.zh-CN.md) 和 [13 个同类项目对标及后续路线](docs/research/peer-landscape-2026-10-02.zh-CN.md)。本地大模型接入暂缓，不影响现有云模型配置。
+
 ## 下载与安装
 
 **[v1.2.5 已发布](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5)**：提供 Windows x64、Intel Mac、Apple Silicon Mac 安装包、Windows 便携版，以及同版本源码和 SHA256 校验文件。新增失败指导原位重试，保留历史用量，精简模型上下文，并改善便携版解压启动。详见 [发布与验收报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。

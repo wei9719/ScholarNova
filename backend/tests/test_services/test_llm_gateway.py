@@ -128,6 +128,8 @@ class TestLLMGateway:
                 )
 
         assert result == "Hello, world!"
+        mock_client.close.assert_awaited_once()
+        assert gateway._client is None
         assert gateway.last_usage == {
             "prompt_tokens": 12,
             "completion_tokens": 4,
@@ -201,6 +203,7 @@ class TestLLMGateway:
 
         assert result == "Recovered"
         failed_client.close.assert_awaited_once()
+        healthy_client.close.assert_awaited_once()
         assert failed_client.chat.completions.create.await_count == 1
         assert healthy_client.chat.completions.create.await_count == 1
         assert gateway.usage["request_attempts"] == 2
@@ -329,6 +332,8 @@ class TestLLMGateway:
                 )
 
         assert result == "Hello from Claude"
+        mock_client.close.assert_awaited_once()
+        assert gateway._client is None
 
     async def test_chat_anthropic_extracts_system_message(self):
         """Anthropic 调用应提取消息中的 system 消息"""

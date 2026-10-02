@@ -8,6 +8,8 @@ Chinese developer learning guide: [Understand ScholarNova step by step](docs/PRO
 
 A desktop research workspace for individuals: **find papers → read full text → save evidence → ask grounded questions → plan research**. Chinese / English, light / dark themes, and bring-your-own-key model configuration.
 
+**Current source: 1.2.7; installers are not yet released.** This round bounds expensive work and queues, isolates late responses, serializes PDF processing, and fixes cache contention. See the [validation and user checklist](docs/reports/v1.2.7-concurrency.zh-CN.md) and [13-project comparison](docs/research/peer-landscape-2026-10-02.zh-CN.md). Published downloads remain the Release assets; source updates do not upgrade an installed app. Local-model integration is paused and existing cloud settings are unchanged.
+
 ## Download and install
 
 **[v1.2.5 is available](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5)** for Windows x64, Intel Mac and Apple Silicon Mac, together with matching source and checksums. Retry failed guidance in place without losing earlier usage, use a compact model context, and benefit from improved portable extraction. See the [release and validation report](docs/reports/v1.2.5-assistant-retry.zh-CN.md).

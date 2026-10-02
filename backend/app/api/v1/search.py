@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limiter import check_rate_limit
+from app.core.capacity import CapacityExceeded, busy_response
 from app.database import get_db
 from app.models.search_run import SearchRun
 from app.schemas.search import SearchRequest, SearchResponse, SearchRunDetail, SearchStatus
@@ -23,6 +24,11 @@ router = APIRouter()
 _running_search_tasks: set[asyncio.Task[None]] = set()
 
 _SOURCE_DESCRIPTORS: dict[str, dict[str, str]] = {
+    "retrieval_limit": {
+        "label": "检索容量保护",
+        "api_name": "本地策略 / 未请求外部 API",
+        "endpoint": "",
+    },
     "semantic_scholar": {
         "label": "Semantic Scholar",
         "api_name": "Semantic Scholar Graph API",
@@ -87,6 +93,11 @@ def _status_call(status: Any) -> dict[str, Any]:
     )
 
 
+def _api_call_count(statuses: list[Any]) -> int:
+    """Capacity notices describe skipped work, not external API requests."""
+    return sum(_source_key(status.source) != "retrieval_limit" for status in statuses)
+
+
 def _merge_source_calls(
     planned: list[dict[str, Any]], statuses: list[Any]
 ) -> list[dict[str, Any]]:
@@ -110,11 +121,63 @@ def _merge_source_calls(
     return completed + remaining
 
 
-def _start_search_task(run_id: str, request: SearchRequest) -> None:
+async def _fail_search(run_id: str, message: str) -> None:
+    from app.database import async_session_factory
+
+    async with async_session_factory() as db:
+        result = await db.execute(select(SearchRun).where(SearchRun.id == run_id))
+        run = result.scalar_one_or_none()
+        if run and run.status in {"pending", "running"}:
+            run.mark_as_failed(message)
+            run.update_progress({**(run.progress or {}), "current_phase": "failed", "message": message})
+            await db.commit()
+
+
+async def _bounded_search(run_id: str, request: SearchRequest, lease) -> None:
+    from app.config import settings
+
+    try:
+        async with lease:
+            await asyncio.wait_for(_execute_search_task(run_id, request), settings.SEARCH_TIMEOUT)
+    except CapacityExceeded:
+        await _fail_search(run_id, "搜索排队超时，请稍后重新检索")
+    except TimeoutError:
+        await _fail_search(run_id, "搜索超过总时限，请缩小范围后重试")
+    except asyncio.CancelledError:
+        await _fail_search(run_id, "搜索已取消或应用正在关闭")
+        raise
+    finally:
+        lease.release()
+
+
+def _start_search_task(run_id: str, request: SearchRequest, lease) -> None:
     """Start and retain a search task until it completes."""
-    task = asyncio.create_task(_execute_search_task(run_id, request))
+    task = asyncio.create_task(
+        _bounded_search(run_id, request, lease), name=f"search:{run_id}"
+    )
     _running_search_tasks.add(task)
-    task.add_done_callback(_running_search_tasks.discard)
+    def finished(completed):
+        lease.release()  # Also handles cancellation before the coroutine starts.
+        _running_search_tasks.discard(completed)
+        if not completed.cancelled() and completed.exception():
+            logger.error("Search worker cleanup failed", exc_info=completed.exception())
+    task.add_done_callback(finished)
+
+
+async def shutdown_search_tasks() -> None:
+    tasks = list(_running_search_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    # A task cancelled before its first scheduling turn never reaches the
+    # coroutine's cancellation handler. Its persisted run must not stay pending.
+    for task in tasks:
+        run_id = task.get_name().removeprefix("search:")
+        try:
+            await _fail_search(run_id, "搜索已取消或应用正在关闭")
+        except Exception:
+            logger.exception("Could not persist search shutdown status", extra={"run_id": run_id})
 
 
 def _collect_constraints(request: SearchRequest):
@@ -206,6 +269,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
 
     async with async_session_factory() as db:
         search_run: SearchRun | None = None
+        sources_map = {}
         try:
             # 获取搜索运行记录
             result = await db.execute(select(SearchRun).where(SearchRun.id == run_id))
@@ -301,7 +365,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 search_run.source_status = {
                     "calls": source_calls,
                     "search_rounds": 1,
-                    "api_calls": len(live_statuses),
+                    "api_calls": _api_call_count(live_statuses),
                 }
                 search_run.update_progress({
                     **(search_run.progress or {}),
@@ -310,7 +374,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                     "total_papers": sum(item.paper_count for item in live_statuses),
                     "current_phase": "searching",
                     "search_rounds": 1,
-                    "api_calls": len(live_statuses),
+                    "api_calls": _api_call_count(live_statuses),
                     "latency_ms": (time.time() - start_time) * 1000,
                     "source_calls": source_calls,
                 })
@@ -364,7 +428,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                         "deduplicated_papers": len(papers),
                         "current_phase": "refining",
                         "search_rounds": 1,
-                        "api_calls": len(all_statuses),
+                        "api_calls": _api_call_count(all_statuses),
                         "latency_ms": (time.time() - start_time) * 1000,
                         "source_calls": _merge_source_calls(
                             planned_calls, live_statuses
@@ -380,7 +444,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                     all_statuses.extend(refined_result.source_statuses)
                     search_rounds = 2
 
-            api_calls = len(all_statuses)
+            api_calls = _api_call_count(all_statuses)
             print(f"[SEARCH] retrieved {len(papers)} papers")
             for s in all_statuses:
                 logger.debug(
@@ -470,7 +534,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                         )
                     )
 
-            api_calls = len(all_statuses)
+            api_calls = _api_call_count(all_statuses)
             eligible_papers = constraint_ranker.filter_hard_constraints(
                 unique_papers,
                 query_plan.constraints,
@@ -546,7 +610,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                             error=None if resolved else semantic_source.last_error,
                         )
                     )
-                    api_calls = len(all_statuses)
+                    api_calls = _api_call_count(all_statuses)
             print(f"[SEARCH] ranked_papers: {len(ranked_papers)}")
             if ranked_papers:
                 print(f"[SEARCH] first paper title: {ranked_papers[0].title[:50]}")
@@ -643,10 +707,6 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                     extra={"run_id": run_id, "error": str(persist_error)},
                 )
 
-            # 关闭数据源连接
-            for source in sources_map.values():
-                await source.close()
-
         except Exception as e:
             if search_run is not None:
                 try:
@@ -657,6 +717,11 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
             logger.exception(
                 "Background search task failed",
                 extra={"run_id": run_id},
+            )
+        finally:
+            await asyncio.gather(
+                *(source.close() for source in sources_map.values()),
+                return_exceptions=True,
             )
 
 
@@ -676,11 +741,17 @@ async def create_search(
     if rate_limit_response:
         return rate_limit_response
 
+    try:
+        lease = http_request.app.state.search_capacity.reserve()
+    except CapacityExceeded:
+        return busy_response()
+
     # 创建 SearchRun 记录
     run_id = str(uuid.uuid4())
     search_run = SearchRun(
         id=run_id,
         raw_query=request.query,
+        progress={"current_phase": "queued"},
         sources=[s.value for s in request.sources],
         max_results=request.max_results,
         filters={
@@ -692,11 +763,14 @@ async def create_search(
             "preferences": request.preferences,
         },
     )
-    db.add(search_run)
-    await db.commit()
-
-    # 真正脱离当前 HTTP 响应执行；任务对象会被保留到完成，避免被提前回收。
-    _start_search_task(run_id, request)
+    try:
+        db.add(search_run)
+        await db.commit()
+        # Reservation follows the job, not the short-lived HTTP 202 response.
+        _start_search_task(run_id, request, lease)
+    except BaseException:
+        lease.release()
+        raise
 
     return SearchResponse(
         run_id=search_run.id,
@@ -753,8 +827,14 @@ async def get_search_run(
         if isinstance(source_status, dict) else progress.get("search_rounds", 0),
         "latency_ms": round(search_run.latency_ms or progress.get("latency_ms", 0), 2),
         "token_usage": search_run.token_usage or {},
-        "successful_calls": sum(1 for item in source_calls if item.get("success")),
-        "failed_calls": sum(1 for item in source_calls if not item.get("success")),
+        "successful_calls": sum(
+            1 for item in source_calls
+            if item.get("source") != "retrieval_limit" and item.get("success")
+        ),
+        "failed_calls": sum(
+            1 for item in source_calls
+            if item.get("source") != "retrieval_limit" and not item.get("success")
+        ),
     }
 
     return SearchRunDetail(

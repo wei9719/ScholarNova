@@ -74,7 +74,7 @@ it('renders a capability answer as product help without research-evidence warnin
   fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
   expect(await screen.findByText(productHelp.answer)).toBeInTheDocument()
-  expect(mocks.chat).toHaveBeenCalledWith(expect.objectContaining({ question: '你可以做什么' }))
+  expect(mocks.chat).toHaveBeenCalledWith(expect.objectContaining({ question: '你可以做什么' }), expect.any(AbortSignal))
   expectProductGuide()
 })
 
@@ -298,7 +298,7 @@ it('sends only the active conversation\'s latest six messages for a follow-up', 
     history: previousMessages.slice(-6).map(({ role, content }) => ({ role, content })),
     use_knowledge: true,
     use_zotero: true,
-  })
+  }, expect.any(AbortSignal))
 })
 
 const failedHelp: AgentChatResponse = {
@@ -345,7 +345,7 @@ it('retries one turn without duplicate context and retains every previous usage 
     question: '我该如何使用你？',
     history: previousMessages.slice(-6).map(({ role, content }) => ({ role, content })),
     use_knowledge: true, use_zotero: true,
-  })
+  }, expect.any(AbortSignal))
   await act(async () => { resolveChat({ data: reportedFailure }) })
 
   mocks.chat.mockResolvedValueOnce({ data: modelHelp })
@@ -413,4 +413,53 @@ it('retains the failed answer when a retry transport request rejects', async () 
   expect(screen.getByRole('button', { name: '再次调用 AI' })).toBeEnabled()
   expect(useAssistantStore.getState().conversations[0].messages).toHaveLength(2)
   expect(useAssistantStore.getState().conversations[0].messages[1].result).toEqual(failedHelp)
+})
+
+it('aborts on leaving and never restores an old reply after returning and clearing', async () => {
+  let finish!: (value: any) => void
+  mocks.chat.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  const view = render(<ResearchAssistant />)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '旧问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  const signal = mocks.chat.mock.calls[0][1] as AbortSignal
+  view.unmount()
+  expect(signal.aborted).toBe(true)
+  render(<ResearchAssistant />)
+  fireEvent.click(screen.getByRole('button', { name: '清空对话' }))
+  await act(async () => { finish({ data: productHelp }) })
+  expect(useAssistantStore.getState().conversations[0].messages).toHaveLength(0)
+  expect(screen.queryByText(productHelp.answer)).not.toBeInTheDocument()
+})
+
+it('does not let an unmounted request append out of order after a new question', async () => {
+  let finish!: (value: any) => void
+  mocks.chat.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  const view = render(<ResearchAssistant />)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '旧问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  view.unmount()
+  render(<ResearchAssistant />)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '新问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await screen.findByText(productHelp.answer)
+  await act(async () => { finish({ data: { ...productHelp, answer: '过期回答' } }) })
+  expect(screen.queryByText('过期回答')).not.toBeInTheDocument()
+  expect(useAssistantStore.getState().conversations[0].messages.map(message => message.content))
+    .toEqual(['旧问题', '新问题', productHelp.answer])
+})
+
+it.each(['clear', 'delete'])('does not append when its conversation is %s in shared state', async (operation) => {
+  let finish!: (value: any) => void
+  mocks.chat.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  render(<ResearchAssistant />)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '待完成问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  act(() => {
+    const store = useAssistantStore.getState()
+    if (operation === 'clear') store.clearConversation('guide-chat')
+    else store.deleteConversation('guide-chat')
+  })
+  await act(async () => { finish({ data: productHelp }) })
+  expect(useAssistantStore.getState().conversations.every(conversation => conversation.messages.length === 0)).toBe(true)
+  expect(screen.queryByText(productHelp.answer)).not.toBeInTheDocument()
 })

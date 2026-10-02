@@ -83,7 +83,7 @@ describe('API Client', () => {
       expect(mockedAxios.post).toHaveBeenCalledWith('/papers/paper-123/analyze', {
         query: 'summarize',
         analysis_type: 'full',
-      })
+      }, { signal: undefined })
     })
 
     it('should call POST /papers/compare', async () => {
@@ -212,7 +212,16 @@ describe('API Client', () => {
         question: 'What are the research gaps?',
         use_knowledge: true,
         use_zotero: true,
-      })
+      }, { signal: undefined })
+    })
+
+    it('forwards cancellation signals for model requests', async () => {
+      const signal = new AbortController().signal
+      const mockedAxios = vi.mocked(axios.create())
+      await agentApi.chat({ question: 'Help' }, signal)
+      expect(mockedAxios.post).toHaveBeenCalledWith('/agent/chat', { question: 'Help' }, { signal })
+      await papersApi.analyze('p1', { query: 'Analyze', analysis_type: 'full' }, signal)
+      expect(mockedAxios.post).toHaveBeenCalledWith('/papers/p1/analyze', { query: 'Analyze', analysis_type: 'full' }, { signal })
     })
   })
 })

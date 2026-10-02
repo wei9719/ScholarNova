@@ -1,0 +1,79 @@
+{
+  "scope": "Offline, single-process in-memory ASGI; synthetic 100 ms upstream wait. No real API calls.",
+  "limitation": "Not an HTTP/network/SQLite/PDF/GPU benchmark and not a multi-user throughput claim.",
+  "cases": [
+    {
+      "bounded": false,
+      "requests": 100,
+      "stagger_ms": 0.0,
+      "mock_work_ms": 100,
+      "statuses": {
+        "200": 100
+      },
+      "handler_peak_active": 100,
+      "success_latency_p50_ms": 99.058,
+      "success_latency_p95_ms": 113.513,
+      "health_probes": 25,
+      "health_p95_ms": 1.557,
+      "wall_ms": 628.542,
+      "capacity_after": {
+        "active": 0,
+        "queued": 0,
+        "active_limit": 4,
+        "queue_limit": 8,
+        "peak_active": 0,
+        "rejected": 0,
+        "queue_timeouts": 0
+      }
+    },
+    {
+      "bounded": true,
+      "requests": 100,
+      "stagger_ms": 0.0,
+      "mock_work_ms": 100,
+      "statuses": {
+        "200": 12,
+        "429": 88
+      },
+      "handler_peak_active": 4,
+      "success_latency_p50_ms": 194.615,
+      "success_latency_p95_ms": 287.025,
+      "health_probes": 25,
+      "health_p95_ms": 1.464,
+      "wall_ms": 688.694,
+      "capacity_after": {
+        "active": 0,
+        "queued": 0,
+        "active_limit": 4,
+        "queue_limit": 8,
+        "peak_active": 4,
+        "rejected": 88,
+        "queue_timeouts": 0
+      }
+    },
+    {
+      "bounded": true,
+      "requests": 100,
+      "stagger_ms": 30.0,
+      "mock_work_ms": 100,
+      "statuses": {
+        "200": 100
+      },
+      "handler_peak_active": 4,
+      "success_latency_p50_ms": 95.246,
+      "success_latency_p95_ms": 111.096,
+      "health_probes": 25,
+      "health_p95_ms": 1.381,
+      "wall_ms": 3096.337,
+      "capacity_after": {
+        "active": 0,
+        "queued": 0,
+        "active_limit": 4,
+        "queue_limit": 8,
+        "peak_active": 4,
+        "rejected": 0,
+        "queue_timeouts": 0
+      }
+    }
+  ]
+}

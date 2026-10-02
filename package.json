@@ -1,6 +1,6 @@
 {
   "name": "scholarnova-desktop",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "private": true,
   "description": "ScholarNova desktop packaging for Windows and macOS.",
   "author": "Zhang Weiguo and ScholarNova contributors",

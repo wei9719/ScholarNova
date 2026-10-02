@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _SOURCE_FAILURE_COUNTS: dict[str, int] = {}
 _SOURCE_CIRCUIT_UNTIL: dict[str, float] = {}
 _SOURCE_CIRCUIT_SECONDS = 60.0
+MAX_SOURCE_REQUESTS = 12
 
 
 @dataclass
@@ -105,10 +106,21 @@ class Retriever:
         # 创建检索任务。结果按完成顺序消费，让界面能够立即看到每个 API
         # 的真实状态，而不必等待最慢的数据源。
         tasks: list[asyncio.Task] = []
+        seen: set[tuple[DataSource, str]] = set()
+        duplicate_count = 0
+        truncated_count = 0
         for sq in sub_queries:
+            signature = (sq.source, sq.query.strip())
+            if signature in seen:
+                duplicate_count += 1
+                continue
+            seen.add(signature)
             source = self.sources.get(sq.source)
             logger.info(f"[retriever] 查找数据源: {sq.source} -> {'找到' if source else '未找到'}")
             if source:
+                if len(tasks) >= MAX_SOURCE_REQUESTS:
+                    truncated_count += 1
+                    continue
                 tasks.append(asyncio.create_task(
                     self._retrieve_from_source(source, sq.query, max_results)
                 ))
@@ -121,20 +133,44 @@ class Retriever:
 
         all_papers: List[Paper] = []
         statuses: List[SourceStatus] = []
-        for task in asyncio.as_completed(tasks):
-            try:
-                papers, status = await task
-            except Exception as exc:  # Defensive: source adapters are isolated below.
-                logger.exception("检索任务出现未捕获异常")
-                status = SourceStatus(source="unknown", success=False, error=str(exc))
-                papers = []
-            all_papers.extend(papers)
-            statuses.append(status)
-            if progress_callback is not None:
+        try:
+            if duplicate_count:
+                logger.info("检索子查询去重：跳过 %s 个重复项", duplicate_count)
+            if truncated_count:
+                status = SourceStatus(
+                    source="retrieval_limit", success=False,
+                    error=(
+                        f"本轮最多执行 {MAX_SOURCE_REQUESTS} 个不同子查询，"
+                        f"已跳过 {truncated_count} 个超限子查询；结果仅覆盖已执行部分"
+                    ),
+                )
+                statuses.append(status)
+                logger.warning(status.error)
+                if progress_callback is not None:
+                    try:
+                        await progress_callback(status)
+                    except Exception:
+                        logger.exception("写入检索上限提示失败；继续返回已获取的论文")
+            for task in asyncio.as_completed(tasks):
                 try:
-                    await progress_callback(status)
-                except Exception:
-                    logger.exception("写入检索进度失败；继续返回已获取的论文")
+                    papers, status = await task
+                except Exception as exc:  # Source adapters normally isolate failures.
+                    logger.exception("检索任务出现未捕获异常")
+                    status = SourceStatus(source="unknown", success=False, error=str(exc))
+                    papers = []
+                all_papers.extend(papers)
+                statuses.append(status)
+                if progress_callback is not None:
+                    try:
+                        await progress_callback(status)
+                    except Exception:
+                        logger.exception("写入检索进度失败；继续返回已获取的论文")
+        finally:
+            # Parent timeout/cancellation must not leave source requests running.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         ok_count = sum(1 for s in statuses if s.success)
         fail_count = sum(1 for s in statuses if not s.success)

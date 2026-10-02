@@ -18,6 +18,7 @@ from app import __version__
 from app.api.v1.router import api_router
 from app.config import runtime_path, settings
 from app.core.cache import CacheManager
+from app.core.capacity import ExpensiveRequestMiddleware, WorkPool
 from app.core.exceptions import ScholarNovaException
 from app.core.logging import get_logger, setup_logging
 from app.core.rate_limiter import get_client_ip
@@ -171,7 +172,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 关闭时执行
     logger.info("Shutting down ScholarNova API")
-    await cache_manager.close()
+    from app.api.v1.search import shutdown_search_tasks
+    await shutdown_search_tasks()
+    await CacheManager.close_all()
     await close_db()
     logger.info("Cleanup completed")
 
@@ -197,6 +200,14 @@ def create_app() -> FastAPI:
     # -----------------------------------------------------------------------
     # 中间件（按注册的逆序执行，先注册的后执行）
     # -----------------------------------------------------------------------
+
+    app.state.search_capacity = WorkPool(
+        settings.SEARCH_MAX_ACTIVE, settings.SEARCH_MAX_QUEUED, settings.SEARCH_QUEUE_TIMEOUT,
+    )
+    app.state.ai_capacity = WorkPool(
+        settings.AI_MAX_ACTIVE, settings.AI_MAX_QUEUED, settings.AI_QUEUE_TIMEOUT,
+    )
+    app.add_middleware(ExpensiveRequestMiddleware, pool=app.state.ai_capacity)
 
     # 1. 安全响应头
     app.add_middleware(SecurityHeadersMiddleware)

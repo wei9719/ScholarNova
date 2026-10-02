@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
 from collections import Counter, defaultdict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.pool import StaticPool
 
 from app.config import get_embedding_config
 from app.models.retrieval import RetrievalEmbedding
@@ -17,9 +23,7 @@ from app.services.retrieval.bm25 import RankedChunk, rank_chunks
 from app.services.retrieval.embeddings import EmbeddingGateway
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from collections.abc import AsyncIterator, Sequence
 
     from app.services.retrieval.contracts import RetrievalChunk
 
@@ -27,6 +31,44 @@ logger = logging.getLogger(__name__)
 
 MAX_SEMANTIC_CANDIDATES = 256
 EMBEDDING_BATCH_SIZE = 64
+CACHE_DB_TIMEOUT_SECONDS = 0.75
+
+
+@asynccontextmanager
+async def _cache_session(db: AsyncSession) -> AsyncIterator[AsyncSession]:
+    """Own a short cache transaction, never the caller's business transaction."""
+    engine = db.bind
+    # A connection-bound session or in-memory StaticPool cannot provide an
+    # independent connection. Cache persistence is optional in these cases.
+    if not isinstance(engine, AsyncEngine) or isinstance(engine.pool, StaticPool):
+        raise RuntimeError("Embedding cache requires an independent connection")
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Embedding cache dialect is unsupported")
+    async with asyncio.timeout(CACHE_DB_TIMEOUT_SECONDS):
+        async with engine.connect() as connection:
+            previous_busy_timeout = None
+            try:
+                if engine.dialect.name == "sqlite":
+                    previous_busy_timeout = (
+                        await connection.exec_driver_sql("PRAGMA busy_timeout")
+                    ).scalar_one()
+                    await connection.exec_driver_sql("PRAGMA busy_timeout=100")
+                    await connection.rollback()
+                async with AsyncSession(bind=connection, expire_on_commit=False) as cache:
+                    yield cache
+            finally:
+                if previous_busy_timeout is not None:
+                    try:
+                        # A failed INSERT may have invalidated the transaction.
+                        # End it before restoring connection-local pool settings.
+                        await connection.rollback()
+                        await connection.exec_driver_sql(
+                            f"PRAGMA busy_timeout={int(previous_busy_timeout)}"
+                        )
+                        await connection.rollback()
+                    except BaseException:
+                        await connection.invalidate()
+                        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,18 +206,23 @@ async def _cached_vectors(
     gateway: EmbeddingGateway,
 ) -> tuple[dict[str, list[float]], int, int, int]:
     hashes = list(texts)
-    existing_result = await db.execute(
-        select(RetrievalEmbedding).where(
-            RetrievalEmbedding.provider == provider,
-            RetrievalEmbedding.model == model,
-            RetrievalEmbedding.input_hash.in_(hashes),
-        )
-    )
-    existing = {
-        item.input_hash: item.as_vector()
-        for item in existing_result.scalars().all()
-        if item.vector and item.dimensions == len(item.vector)
-    }
+    existing: dict[str, list[float]] = {}
+    try:
+        async with _cache_session(db) as cache:
+            existing_result = await cache.execute(
+                select(RetrievalEmbedding).where(
+                    RetrievalEmbedding.provider == provider,
+                    RetrievalEmbedding.model == model,
+                    RetrievalEmbedding.input_hash.in_(hashes),
+                )
+            )
+            existing = {
+                item.input_hash: item.as_vector()
+                for item in existing_result.scalars().all()
+                if item.vector and item.dimensions == len(item.vector)
+            }
+    except Exception as exc:
+        logger.info("Embedding cache read skipped (%s)", type(exc).__name__)
     missing = [input_hash for input_hash in hashes if input_hash not in existing]
     generated: dict[str, list[float]] = {}
     input_tokens = 0
@@ -184,19 +231,27 @@ async def _cached_vectors(
         batch = await gateway.embed([texts[input_hash] for input_hash in batch_hashes])
         input_tokens += batch.input_tokens
         generated.update(zip(batch_hashes, batch.vectors, strict=True))
-    for input_hash, vector in generated.items():
-        db.add(
-            RetrievalEmbedding(
-                id=RetrievalEmbedding.build_id(provider, model, input_hash),
-                provider=provider,
-                model=model,
-                input_hash=input_hash,
-                dimensions=len(vector),
-                vector=vector,
-            )
-        )
     if generated:
-        await db.flush()
+        rows = [
+            {
+                "id": RetrievalEmbedding.build_id(provider, model, input_hash),
+                "provider": provider,
+                "model": model,
+                "input_hash": input_hash,
+                "dimensions": len(vector),
+                "vector": vector,
+            }
+            for input_hash, vector in generated.items()
+        ]
+        try:
+            async with _cache_session(db) as cache:
+                insert = sqlite_insert if cache.bind.dialect.name == "sqlite" else postgres_insert
+                await cache.execute(insert(RetrievalEmbedding).on_conflict_do_nothing(), rows)
+                await cache.commit()
+        except Exception as exc:
+            # Cache contention must neither invalidate the user's session nor
+            # discard already-paid vectors and their returned token usage.
+            logger.info("Embedding cache write skipped (%s)", type(exc).__name__)
     return {**existing, **generated}, input_tokens, len(existing), len(generated)
 
 
@@ -272,7 +327,7 @@ async def rank_chunks_hybrid(
             semantic_status="completed" if fused else "unavailable",
             detail=(
                 f"{provider}/{model} 对 {len(pool)} 个候选执行语义排序；"
-                f"缓存命中 {hits}，新建 {misses}，Embedding Token {tokens}"
+                f"缓存命中 {hits}，新生成 {misses}，Embedding Token {tokens}"
             ),
             embedding_tokens=tokens,
             cache_hits=hits,

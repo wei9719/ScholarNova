@@ -84,7 +84,7 @@ async def test_pdf_parser_preserves_section_and_figure_pages(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_uploaded_pdf_is_persisted_and_used_as_fulltext(tmp_path, monkeypatch):
+async def test_uploaded_pdf_is_persisted_and_used_as_fulltext(tmp_path, monkeypatch, db_session):
     import pymupdf
 
     monkeypatch.setattr(settings, "RUNTIME_DIR", str(tmp_path))
@@ -109,7 +109,7 @@ async def test_uploaded_pdf_is_persisted_and_used_as_fulltext(tmp_path, monkeypa
     result = await analysis_api.upload_fulltext(
         "paper-1",
         UploadFile(filename="paper.pdf", file=BytesIO(pdf_bytes)),
-        db=object(),
+        db=db_session,
     )
     assert result["available"] is True
     assert result["page_count"] == 3
@@ -131,7 +131,7 @@ async def test_uploaded_pdf_is_persisted_and_used_as_fulltext(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_invalid_upload_is_rejected(tmp_path, monkeypatch):
+async def test_invalid_upload_is_rejected(tmp_path, monkeypatch, db_session):
     monkeypatch.setattr(settings, "RUNTIME_DIR", str(tmp_path))
 
     async def paper_exists(_paper_id, _db):
@@ -142,6 +142,6 @@ async def test_invalid_upload_is_rejected(tmp_path, monkeypatch):
         await analysis_api.upload_fulltext(
             "paper-1",
             UploadFile(filename="fake.pdf", file=BytesIO(b"not-a-pdf")),
-            db=object(),
+            db=db_session,
         )
     assert getattr(exc_info.value, "status_code", None) == 400

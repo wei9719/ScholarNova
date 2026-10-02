@@ -121,9 +121,13 @@ export default function PaperDetailPanel({
       setFulltextStatus(data)
       setActiveAnalysis('full')
       setActiveTab('analysis')
-      toast.success(isChinese
-        ? `全文已导入（${data.page_count || 0} 页），正在重新分析`
-        : `Full text imported (${data.page_count || 0} pages). Re-analyzing.`)
+      if (data.feature_error) {
+        toast(data.feature_error, { icon: '⚠️', duration: 6000 })
+      } else {
+        toast.success(isChinese
+          ? `全文已导入（${data.page_count || 0} 页），正在重新分析`
+          : `Full text imported (${data.page_count || 0} pages). Re-analyzing.`)
+      }
       onFulltextUploaded()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || (isChinese ? 'PDF 导入失败' : 'PDF import failed'))
@@ -383,7 +387,9 @@ export default function PaperDetailPanel({
           ) : fulltextStatus?.available && !analysis ? (
             <>
               <FileCheck2 className="w-4 h-4 flex-shrink-0" />
-              <span>{isChinese ? '全文已就绪，AI 分析将读取正文与图表。' : 'Full text is ready for the next analysis.'}</span>
+              <span>{fulltextStatus.feature_error || (isChinese
+                ? 'PDF 已保存，实际正文与图表读取情况以分析结果为准。'
+                : 'PDF saved. The analysis result will report text and figure coverage.')}</span>
             </>
           ) : (
             <div className="min-w-0">

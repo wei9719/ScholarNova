@@ -33,16 +33,18 @@ counted from the actual tokenized prompt and generated tokens, including EOS.
 There is one decoding worker and no request queue. Busy requests return 429.
 Timeouts and disconnects request cooperative cancellation at the next decoding
 step. The slot stays occupied until that worker actually stops; cancellation
-cannot interrupt an in-progress GPU kernel or prefill instantly. Shutdown waits
-for the worker before releasing model memory. The launcher may terminate its own
-child process if graceful shutdown exceeds its deadline.
+cannot interrupt an in-progress GPU kernel or prefill instantly. A normal service
+shutdown waits for the worker before releasing model memory. On Windows, the
+desktop launcher stops only its owned child PID tree directly; it does not first
+request graceful shutdown and does not stop unrelated processes by port or name.
 
 Loading checks free RAM and GPU memory before allocation. `auto` selects CUDA if
 available; insufficient GPU memory fails explicitly instead of silently putting
 the model in system RAM. These checks are conservative estimates, not a guarantee
 against other programs allocating memory concurrently. Model/cache access is
 offline; process-local temporary caches are created under the launcher's TEMP
-directory and removed on graceful shutdown.
+directory and removed on graceful shutdown. Forced termination, including the
+Windows desktop stop action, does not guarantee temporary-cache cleanup.
 
 Offline tests: `python -m pytest tests/test_local_inference.py -q` in a configured
 ScholarNova development environment. Tests mock inference; they do not load weights,

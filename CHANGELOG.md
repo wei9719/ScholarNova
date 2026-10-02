@@ -4,6 +4,19 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.8 source — usable research workflows
+
+- Paginate both knowledge entries and research routes; search knowledge on the server instead of filtering only the first page. Load linked route sources by their IDs and report missing sources separately.
+- Remove misleading category bulk deletion that only covered the loaded page; individual entry deletion remains available.
+- Pass user goals into knowledge analysis and architecture review. Keep excerpt boundaries explicit and do not treat saved draft claims as paper evidence.
+- Replace the obsolete structured-card save action with explicit full-analysis route saving, retaining source IDs and requirements. Route generation now reads the saved draft instead of silently discarding it.
+- Add a per-conversation evidence category, filtering notes and linked PDF chunks before retrieval limits. Specified categories exclude unscoped Zotero results. Changing scope isolates previous model context while retaining readable history.
+- Keep ambiguous saves marked as unconfirmed across navigation, fix the saved-route link, and prevent the initial search debounce from resetting a fast page change. Render structured validation failures as text instead of crashing the analysis/assistant page.
+- Mark historical assistant citations as previous-turn references rather than reusing current-turn source numbers. Keep asynchronous conversation errors on their originating conversation.
+- Test production search and knowledge components, full save/revisit flows, database feature updates, and category isolation with synthetic materials and isolated state.
+
+See [panel purposes, validation and the manual research scenario](docs/reports/v1.2.8-research-workflow.zh-CN.md). No new paid model calls, user-data migration, Zotero setup or local-model loading in this round.
+
 ### 1.2.7 source — concurrency and task reliability
 
 - Bound active searches and their waiting queue, enforce a search execution deadline, and reclaim child requests on cancellation/shutdown. Keep completed/failed results terminal.

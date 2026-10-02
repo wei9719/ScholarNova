@@ -35,7 +35,7 @@ export default function SearchBar({
   }
 
   return (
-    <form onSubmit={handleSubmit} className={clsx('search-bar-wrapper', size === 'lg' && 'search-bar-lg')}>
+    <form role="search" onSubmit={handleSubmit} className={clsx('search-bar-wrapper', size === 'lg' && 'search-bar-lg')}>
       <div className="search-bar-container">
         <Search className="search-bar-icon" />
         <input
@@ -44,6 +44,7 @@ export default function SearchBar({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder={placeholder || defaultPlaceholder}
+          aria-label={placeholder || defaultPlaceholder}
           className="search-bar-input"
           disabled={loading}
         />

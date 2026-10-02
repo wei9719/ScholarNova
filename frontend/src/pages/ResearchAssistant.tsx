@@ -17,7 +17,7 @@ import {
   AlertTriangle,
   Trash2,
 } from 'lucide-react'
-import { agentApi, zoteroApi } from '@/api/client'
+import { agentApi, knowledgeApi, zoteroApi } from '@/api/client'
 import type { AgentChatResponse, AgentMessage } from '@/api/types'
 import { useAssistantStore, type AssistantMessage } from '@/stores/assistantStore'
 import { useLocaleStore } from '@/stores/localeStore'
@@ -43,6 +43,7 @@ export default function ResearchAssistant() {
     deleteConversation,
     setActiveConversation,
     moveConversation,
+    setKnowledgeCategory,
     appendMessage,
     replaceMessage,
     replaceMessages,
@@ -50,6 +51,10 @@ export default function ResearchAssistant() {
   } = useAssistantStore()
   const activeConversation = conversations.find((item) => item.id === activeConversationId) || conversations[0]
   const messages = activeConversation?.messages || []
+  const knowledgeCategory = activeConversation?.knowledgeCategory ?? null
+  const scopeRevision = activeConversation?.scopeRevision ?? 0
+  const [categories, setCategories] = useState<{ name: string; count: number }[]>([])
+  const [categoriesStatus, setCategoriesStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [question, setQuestion] = useState('')
   const [showFolderInput, setShowFolderInput] = useState(false)
   const [folderName, setFolderName] = useState('')
@@ -92,6 +97,16 @@ export default function ResearchAssistant() {
     deleteFolder: '删除文件夹（对话移至未分类）',
     deleteChat: '删除当前对话',
     contextNotice: '每个对话使用独立上下文',
+    category: '知识库资料分类',
+    allCategories: '全部资料（按启用来源）',
+    categoryLoading: '正在读取知识库分类…',
+    categoryError: '分类列表读取失败，已保留当前范围；请稍后重新进入本页。',
+    categoryMissing: '该分类已不存在或暂无资料',
+    folderScopeNotice: '研究文件夹仅整理对话，不决定资料范围。',
+    categoryScopeNotice: '仅检索所选分类的知识与关联 PDF，不包含 Zotero。',
+    scopeHistory: '历史范围 · 仅供查看，不作为当前上下文',
+    scopeChanged: '资料范围已切换，后续问题不携带之前范围的对话。',
+    scopeLabel: '资料范围',
     tools: '工具执行',
     sources: '引用材料',
     noSource: '本次没有可引用材料',
@@ -147,6 +162,16 @@ export default function ResearchAssistant() {
     deleteFolder: 'Delete folder (chats move to Unfiled)',
     deleteChat: 'Delete current chat',
     contextNotice: 'Each chat has isolated context',
+    category: 'Knowledge category',
+    allCategories: 'All material (enabled sources)',
+    categoryLoading: 'Loading knowledge categories…',
+    categoryError: 'Could not load categories. Your selected scope is preserved; reopen this page to retry.',
+    categoryMissing: 'This category is missing or has no material',
+    folderScopeNotice: 'Research folders organize chats; they do not filter evidence.',
+    categoryScopeNotice: 'Searches only this category and its linked PDFs; Zotero is excluded.',
+    scopeHistory: 'Previous scope · shown for reference, excluded from current context',
+    scopeChanged: 'The evidence scope has changed. Earlier-scope messages will not be sent with new questions.',
+    scopeLabel: 'Evidence scope',
     tools: 'Tool activity',
     sources: 'Sources',
     noSource: 'No citable local material was found',
@@ -207,9 +232,31 @@ export default function ResearchAssistant() {
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    let active = true
+    void knowledgeApi.getCategories()
+      .then(({ data }) => {
+        if (!active) return
+        setCategories(data)
+        setCategoriesStatus('ready')
+      })
+      .catch(() => { if (active) setCategoriesStatus('error') })
+    return () => { active = false }
+  }, [])
+
+  const changeKnowledgeCategory = (category: string | null) => {
+    if (pendingConversationRef.current || !activeConversation) return
+    setKnowledgeCategory(activeConversation.id, category)
+    setError('')
+  }
+
   const submit = async (questionOverride?: string, options: { history?: AgentMessage[]; replaceMessageId?: string } = {}) => {
     const cleanQuestion = (questionOverride ?? question).trim()
     if (!cleanQuestion || pendingConversationRef.current || !activeConversation) return
+    if (Array.from(cleanQuestion).length < 2) {
+      setError(isChinese ? '请至少输入 2 个字符，再发送问题。' : 'Enter at least 2 characters before sending your question.')
+      return
+    }
     const conversationId = activeConversation.id
     pendingConversationRef.current = conversationId
     const controller = new AbortController()
@@ -219,12 +266,16 @@ export default function ResearchAssistant() {
       && pendingRequestRef.current === controller
       && !!useAssistantStore.getState().conversations.find((conversation) =>
         conversation.id === conversationId
+        && (conversation.scopeRevision ?? 0) === scopeRevision
+        && (conversation.knowledgeCategory ?? null) === knowledgeCategory
         && conversation.messages.some((message) => message.id === questionId)
       )
-    const history: AgentMessage[] = options.history || messages.slice(-6).map(({ role, content }) => ({ role, content }))
+    const history: AgentMessage[] = options.history || messages
+      .filter((message) => (message.scopeRevision ?? 0) === scopeRevision)
+      .slice(-6).map(({ role, content }) => ({ role, content }))
     const previousReply = messages.find((message) => message.id === options.replaceMessageId)
     if (!options.replaceMessageId) {
-      appendMessage(conversationId, { id: questionId, role: 'user', content: cleanQuestion })
+      appendMessage(conversationId, { id: questionId, role: 'user', content: cleanQuestion, knowledgeCategory, scopeRevision })
       setQuestion('')
     }
     setError('')
@@ -234,7 +285,8 @@ export default function ResearchAssistant() {
         question: cleanQuestion,
         history,
         use_knowledge: useKnowledge,
-        use_zotero: useZotero,
+        use_zotero: knowledgeCategory === null && useZotero,
+        knowledge_category: knowledgeCategory,
       }, controller.signal)
       if (!isCurrentRequest()) return
       const assistantEntry: AssistantMessage = {
@@ -242,6 +294,8 @@ export default function ResearchAssistant() {
         role: 'assistant',
         content: response.data.answer,
         result: response.data,
+        knowledgeCategory,
+        scopeRevision,
         ...(previousReply?.result ? {
           priorResults: [...(previousReply.priorResults || []), previousReply.result],
         } : {}),
@@ -249,11 +303,12 @@ export default function ResearchAssistant() {
       if (options.replaceMessageId) replaceMessage(conversationId, options.replaceMessageId, assistantEntry)
       else appendMessage(conversationId, assistantEntry)
     } catch (requestError: any) {
-      if (!isCurrentRequest()) return
-      setError(
-        requestError.response?.data?.detail
-        || (isChinese ? '智能体暂时无法回答，请检查模型和 Zotero 设置。' : 'The assistant could not answer. Check model and Zotero settings.')
-      )
+      if (!isCurrentRequest() || useAssistantStore.getState().activeConversationId !== conversationId) return
+      const detail = requestError?.response?.data?.detail
+      const message = typeof detail === 'string' ? detail : Array.isArray(detail)
+        ? detail.map((item) => typeof item?.msg === 'string' ? item.msg : '').filter(Boolean).slice(0, 3).join('；')
+        : ''
+      setError(message || (isChinese ? '智能体暂时无法回答，请检查模型和 Zotero 设置。' : 'The assistant could not answer. Check model and Zotero settings.'))
     } finally {
       if (pendingRequestRef.current === controller) {
         pendingRequestRef.current = null
@@ -268,10 +323,14 @@ export default function ResearchAssistant() {
     const index = messages.findIndex((message) => message.id === messageId)
     if (index !== messages.length - 1 || index < 1) return
     const originalQuestion = messages[index - 1]
-    if (originalQuestion.role !== 'user') return
+    if (originalQuestion.role !== 'user'
+      || (originalQuestion.scopeRevision ?? 0) !== scopeRevision
+      || (messages[index].scopeRevision ?? 0) !== scopeRevision) return
     // The backend appends question itself. Include only the preceding turns,
     // so retries have the same context as the original request.
-    const history = messages.slice(Math.max(0, index - 7), index - 1).map(({ role, content }) => ({ role, content }))
+    const history = messages.slice(0, index - 1)
+      .filter((message) => (message.scopeRevision ?? 0) === scopeRevision)
+      .slice(-6).map(({ role, content }) => ({ role, content }))
     void submit(originalQuestion.content, { history, replaceMessageId: messageId })
   }
 
@@ -306,8 +365,8 @@ export default function ResearchAssistant() {
               <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--ui-text-soft)]">{copy.subtitle}</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <SourceToggle active={useKnowledge} onClick={() => setUseKnowledge((value) => !value)} icon={<BookMarked className="h-4 w-4" />} label={copy.knowledge} />
-              <SourceToggle active={useZotero} onClick={() => setUseZotero((value) => !value)} icon={<Library className="h-4 w-4" />} label={`${copy.zotero} · ${zoteroConnected === null ? copy.detecting : zoteroConnected ? copy.connected : copy.unavailable}`} warning={zoteroConnected === false} />
+              <SourceToggle active={useKnowledge} disabled={sending} onClick={() => setUseKnowledge((value) => !value)} icon={<BookMarked className="h-4 w-4" />} label={copy.knowledge} />
+              <SourceToggle active={knowledgeCategory === null && useZotero} disabled={sending || knowledgeCategory !== null} onClick={() => setUseZotero((value) => !value)} icon={<Library className="h-4 w-4" />} label={`${copy.zotero} · ${zoteroConnected === null ? copy.detecting : zoteroConnected ? copy.connected : copy.unavailable}`} warning={zoteroConnected === false} />
             </div>
           </div>
         </section>
@@ -372,6 +431,23 @@ export default function ResearchAssistant() {
                 </div>
               )}
 
+              {activeConversation && (
+                <div className="border-b border-[var(--ui-border)] bg-[var(--ui-surface)] px-4 py-3 text-xs">
+                  <label className="flex flex-wrap items-center gap-2 text-[var(--ui-text)]">
+                    {copy.category}
+                    <select value={knowledgeCategory ?? ''} disabled={sending || !useKnowledge} onChange={(event) => changeKnowledgeCategory(event.target.value || null)} className="max-w-full rounded-lg border border-[var(--ui-border)] bg-[var(--ui-surface-solid)] px-2 py-1.5 outline-none disabled:opacity-50">
+                      <option value="">{copy.allCategories}</option>
+                      {categories.map((category) => <option key={category.name} value={category.name}>{category.name} ({category.count})</option>)}
+                      {knowledgeCategory !== null && !categories.some((category) => category.name === knowledgeCategory) && <option value={knowledgeCategory}>{knowledgeCategory}</option>}
+                    </select>
+                  </label>
+                  <p className="mt-1.5 text-[var(--ui-muted)]">{copy.folderScopeNotice}</p>
+                  {knowledgeCategory !== null && <p className="mt-1 text-[var(--ui-text-soft)]">{copy.categoryScopeNotice}</p>}
+                  {categoriesStatus !== 'ready' && <p role="status" className="mt-1 text-[var(--ui-muted)]">{categoriesStatus === 'loading' ? copy.categoryLoading : copy.categoryError}</p>}
+                  {categoriesStatus === 'ready' && knowledgeCategory !== null && !categories.some((category) => category.name === knowledgeCategory) && <p role="status" className="mt-1 text-amber-700 dark:text-amber-400">{copy.categoryMissing}</p>}
+                </div>
+              )}
+
               <div className="custom-scrollbar max-h-[560px] flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-7">
               {messages.length === 0 && (
                 <div className="mx-auto flex max-w-2xl flex-col items-center py-12 text-center">
@@ -388,13 +464,21 @@ export default function ResearchAssistant() {
 
               {messages.map((message, index) => (
                 <article key={message.id} className={message.role === 'user' ? 'ml-auto max-w-3xl' : 'mr-auto max-w-4xl'}>
+                  {(index === 0 || (messages[index - 1].scopeRevision ?? 0) !== (message.scopeRevision ?? 0)) && (
+                    <p className="mb-2 text-xs text-[var(--ui-muted)]">
+                      {copy.scopeLabel}: {message.knowledgeCategory ?? copy.allCategories}
+                      {(message.scopeRevision ?? 0) !== scopeRevision && ` · ${copy.scopeHistory}`}
+                    </p>
+                  )}
                   <div className={`rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === 'user' ? 'bg-[var(--ui-brand)] text-white dark:text-[#101722]' : 'border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] text-[var(--ui-text)]'}`}>
                     <div className="whitespace-pre-wrap">{message.content}</div>
                   </div>
-                  {message.result && <AgentTrace result={message.result} copy={copy} isChinese={isChinese} onRetry={index === messages.length - 1 && index > 0 && messages[index - 1].role === 'user' ? () => retryMessage(message.id) : undefined} retryDisabled={sending} />}
+                  {message.result && <AgentTrace result={message.result} copy={copy} isChinese={isChinese} onRetry={index === messages.length - 1 && index > 0 && messages[index - 1].role === 'user' && (message.scopeRevision ?? 0) === scopeRevision && (messages[index - 1].scopeRevision ?? 0) === scopeRevision ? () => retryMessage(message.id) : undefined} retryDisabled={sending} />}
                   {message.priorResults?.length ? <RetryHistory results={message.priorResults} isChinese={isChinese} /> : null}
                 </article>
               ))}
+
+              {messages.length > 0 && (messages[messages.length - 1].scopeRevision ?? 0) !== scopeRevision && <p role="status" className="text-xs text-[var(--ui-text-soft)]">{copy.scopeChanged}</p>}
 
               {currentConversationPending && (
                 <div className="flex items-center gap-3 text-sm text-[var(--ui-text-soft)]">
@@ -440,9 +524,9 @@ export default function ResearchAssistant() {
   )
 }
 
-function SourceToggle({ active, onClick, icon, label, warning = false }: { active: boolean; onClick: () => void; icon: ReactNode; label: string; warning?: boolean }) {
+function SourceToggle({ active, onClick, icon, label, warning = false, disabled = false }: { active: boolean; onClick: () => void; icon: ReactNode; label: string; warning?: boolean; disabled?: boolean }) {
   return (
-    <button onClick={onClick} aria-pressed={active} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition ${active ? 'border-[var(--ui-border-strong)] bg-[var(--ui-accent-soft)] text-[var(--ui-text)]' : 'border-[var(--ui-border)] text-[var(--ui-muted)]'} ${warning ? 'border-amber-500/25' : ''}`}>
+    <button onClick={onClick} disabled={disabled} aria-pressed={active} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'border-[var(--ui-border-strong)] bg-[var(--ui-accent-soft)] text-[var(--ui-text)]' : 'border-[var(--ui-border)] text-[var(--ui-muted)]'} ${warning ? 'border-amber-500/25' : ''}`}>
       {icon}{label}{active && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
     </button>
   )

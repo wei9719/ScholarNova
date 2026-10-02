@@ -236,6 +236,7 @@ export const agentApi = {
     history?: AgentMessage[]
     use_knowledge?: boolean
     use_zotero?: boolean
+    knowledge_category?: string | null
   }, signal?: AbortSignal) => api.post<AgentChatResponse>('/agent/chat', data, { signal }),
 }
 
@@ -244,8 +245,8 @@ export const agentApi = {
 // =============================================================================
 
 export const knowledgeApi = {
-  list: (category?: string) =>
-    api.get<KnowledgeListResponse>('/knowledge', { params: category ? { category } : {} }),
+  list: (category?: string, options: { page?: number; page_size?: number; keyword?: string } = {}) =>
+    api.get<KnowledgeListResponse>('/knowledge', { params: { ...options, ...(category ? { category } : {}) } }),
 
   get: (id: string) =>
     api.get<KnowledgeItem>(`/knowledge/${id}`),
@@ -262,8 +263,8 @@ export const knowledgeApi = {
   getCategories: () =>
     api.get<{ name: string; count: number }[]>('/knowledge/categories'),
 
-  aiAnalyze: (knowledgeIds: string[]) =>
-    api.post<AIAnalyzeResponse>('/knowledge/ai-analyze', { knowledge_ids: knowledgeIds }),
+  aiAnalyze: (knowledgeIds: string[], query?: string) =>
+    api.post<AIAnalyzeResponse>('/knowledge/ai-analyze', { knowledge_ids: knowledgeIds, ...(query !== undefined ? { query } : {}) }),
 
   recommend: (knowledgeIds: string[], limit: number = 5) =>
     api.post<RecommendResponse>('/knowledge/recommend', { knowledge_ids: knowledgeIds, limit }),
@@ -271,8 +272,8 @@ export const knowledgeApi = {
   createRoute: (data: RouteCreateRequest) =>
     api.post<ResearchRoute>('/knowledge/routes', data),
 
-  listRoutes: () =>
-    api.get<{ items: ResearchRoute[]; total: number }>('/knowledge/routes'),
+  listRoutes: (options: { page?: number; page_size?: number } = {}) =>
+    api.get<{ items: ResearchRoute[]; total: number }>('/knowledge/routes', { params: options }),
 
   getRoute: (id: string) =>
     api.get<ResearchRoute>(`/knowledge/routes/${id}`),

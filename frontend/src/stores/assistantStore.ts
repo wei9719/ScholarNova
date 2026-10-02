@@ -6,6 +6,8 @@ export interface AssistantMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  knowledgeCategory?: string | null
+  scopeRevision?: number
   result?: AgentChatResponse
   priorResults?: AgentChatResponse[]
 }
@@ -21,6 +23,8 @@ export interface ResearchConversation {
   folderId: string | null
   title: string
   messages: AssistantMessage[]
+  knowledgeCategory?: string | null
+  scopeRevision?: number
   createdAt: number
   updatedAt: number
 }
@@ -35,6 +39,7 @@ interface AssistantState {
   deleteConversation: (id: string) => void
   setActiveConversation: (id: string) => void
   moveConversation: (id: string, folderId: string | null) => void
+  setKnowledgeCategory: (id: string, category: string | null) => void
   appendMessage: (conversationId: string, message: AssistantMessage) => void
   replaceMessage: (conversationId: string, messageId: string, message: AssistantMessage) => void
   replaceMessages: (conversationId: string, messages: AssistantMessage[]) => void
@@ -49,7 +54,7 @@ function newId() {
 
 function newConversation(folderId: string | null = null): ResearchConversation {
   const now = Date.now()
-  return { id: newId(), folderId, title: '新对话', messages: [], createdAt: now, updatedAt: now }
+  return { id: newId(), folderId, title: '新对话', messages: [], knowledgeCategory: null, scopeRevision: 0, createdAt: now, updatedAt: now }
 }
 
 const initialConversation = newConversation()
@@ -102,6 +107,19 @@ export const useAssistantStore = create<AssistantState>()(
       moveConversation: (id, folderId) => set((state) => ({
         conversations: state.conversations.map((conversation) =>
           conversation.id === id ? { ...conversation, folderId, updatedAt: Date.now() } : conversation
+        ),
+      })),
+
+      setKnowledgeCategory: (id, category) => set((state) => ({
+        conversations: state.conversations.map((conversation) =>
+          conversation.id === id && (conversation.knowledgeCategory ?? null) !== category
+            ? {
+                ...conversation,
+                knowledgeCategory: category,
+                scopeRevision: (conversation.scopeRevision ?? 0) + 1,
+                updatedAt: Date.now(),
+              }
+            : conversation
         ),
       })),
 

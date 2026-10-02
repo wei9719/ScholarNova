@@ -4,10 +4,12 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import RouteDetail from '../RouteDetail'
 
 const mocks = vi.hoisted(() => ({
-  getRoute: vi.fn(), stream: vi.fn(), success: vi.fn(), error: vi.fn(),
+  getRoute: vi.fn(), get: vi.fn(), list: vi.fn(), stream: vi.fn(), success: vi.fn(), error: vi.fn(),
 }))
 vi.mock('@/api/client', () => ({ knowledgeApi: {
   getRoute: mocks.getRoute,
+  get: mocks.get,
+  list: mocks.list,
   generateRouteAnalysisStream: mocks.stream,
 } }))
 vi.mock('react-hot-toast', () => ({ default: { success: mocks.success, error: mocks.error } }))
@@ -88,4 +90,44 @@ it('labels generic planning fallback even when both images were generated', asyn
   await generateRoute()
   await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('图像已生成，但部分规划为规则回退，尚非完整定制方案'))
   expect(mocks.success).not.toHaveBeenCalled()
+})
+
+it('loads every linked ID directly even when it is outside the first knowledge page', async () => {
+  const ids = Array.from({ length: 21 }, (_, index) => `older-${index}`)
+  mocks.getRoute.mockResolvedValue({ data: {
+    id: 'route-1', title: '旧路线', knowledge_ids: [...ids, ids[0]], ai_analysis: '', status: 'active',
+  } })
+  let active = 0
+  let peak = 0
+  mocks.get.mockImplementation(async (id: string) => {
+    active += 1
+    peak = Math.max(peak, active)
+    await Promise.resolve()
+    active -= 1
+    return { data: { id, title: `关联资料 ${id}`, category: '食品', tags: [] } }
+  })
+  render(<MemoryRouter initialEntries={['/knowledge/routes/route-1']}>
+    <Routes><Route path="/knowledge/routes/:id" element={<RouteDetail />} /></Routes>
+  </MemoryRouter>)
+  expect(await screen.findByText('关联资料 older-20')).toBeInTheDocument()
+  expect(mocks.get).toHaveBeenCalledTimes(21)
+  expect(mocks.list).not.toHaveBeenCalled()
+  expect(peak).toBe(4)
+  expect(active).toBe(0)
+})
+
+it('keeps available linked evidence and reports missing or failed entries', async () => {
+  mocks.getRoute.mockResolvedValue({ data: {
+    id: 'route-1', title: '旧路线', knowledge_ids: ['good', 'deleted'], ai_analysis: '', status: 'active',
+  } })
+  mocks.get.mockImplementation(async (id: string) => {
+    if (id === 'deleted') throw new Error('404')
+    return { data: { id, title: '有效关联材料', category: '食品', tags: [] } }
+  })
+  render(<MemoryRouter initialEntries={['/knowledge/routes/route-1']}>
+    <Routes><Route path="/knowledge/routes/:id" element={<RouteDetail />} /></Routes>
+  </MemoryRouter>)
+  expect(await screen.findByText('有效关联材料')).toBeInTheDocument()
+  expect(screen.getByRole('status')).toHaveTextContent('1 条关联知识已删除或暂时无法读取')
+  expect(screen.getByRole('button', { name: 'common.retry' })).toBeInTheDocument()
 })

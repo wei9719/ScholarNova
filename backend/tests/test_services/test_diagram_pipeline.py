@@ -20,7 +20,7 @@ async def test_architecture_judge_receives_the_actual_analysis(monkeypatch):
     result = await architecture_judge.judge_architecture("交通预测背景", analysis)
 
     prompt = routed.call_args.kwargs["messages"][1]["content"]
-    assert f"----- 原文开始 -----\n{analysis}\n----- 原文结束 -----" in prompt
+    assert f"----- 原文开始 -----\n{json.dumps(analysis, ensure_ascii=False)}\n----- 原文结束 -----" in prompt
     assert "{analysis}" not in prompt
     assert result["layers"][0]["modules"][0]["name"] == "频域编码"
 

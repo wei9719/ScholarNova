@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Loader2, Route, BookMarked, Sparkles,
@@ -20,6 +20,8 @@ export default function RouteDetail() {
 
   const [route, setRoute] = useState<ResearchRoute | null>(null)
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([])
+  const [unavailableKnowledge, setUnavailableKnowledge] = useState(0)
+  const routeFetchSequence = useRef(0)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -76,32 +78,39 @@ export default function RouteDetail() {
 
   const fetchRoute = useCallback(async () => {
     if (!id) return
+    const sequence = ++routeFetchSequence.current
     setLoading(true)
     setError(null)
+    setKnowledgeItems([])
+    setUnavailableKnowledge(0)
     try {
       const response = await knowledgeApi.getRoute(id)
+      if (sequence !== routeFetchSequence.current) return
       setRoute(response.data)
-      // Fetch related knowledge items
-      if (response.data.knowledge_ids && response.data.knowledge_ids.length > 0) {
-        try {
-          const allItems = await knowledgeApi.list()
-          const related = allItems.data.items.filter((item) =>
-            response.data.knowledge_ids.includes(item.id)
-          )
-          setKnowledgeItems(related)
-        } catch {
-          // Knowledge items may not be available
+      const ids = [...new Set(response.data.knowledge_ids || [])]
+      const related: KnowledgeItem[] = []
+      let unavailable = 0
+      // Resolve actual references, not the first page of the global library.
+      for (let offset = 0; offset < ids.length; offset += 4) {
+        const results = await Promise.allSettled(ids.slice(offset, offset + 4).map((kid) => knowledgeApi.get(kid)))
+        if (sequence !== routeFetchSequence.current) return
+        for (const result of results) {
+          if (result.status === 'fulfilled') related.push(result.value.data)
+          else unavailable += 1
         }
       }
+      setKnowledgeItems(related)
+      setUnavailableKnowledge(unavailable)
     } catch {
-      setError(t('common.error'))
+      if (sequence === routeFetchSequence.current) setError(t('common.error'))
     } finally {
-      setLoading(false)
+      if (sequence === routeFetchSequence.current) setLoading(false)
     }
   }, [id])
 
   useEffect(() => {
     fetchRoute()
+    return () => { routeFetchSequence.current += 1 }
   }, [fetchRoute])
 
   const handleGenerate = async () => {
@@ -322,6 +331,12 @@ export default function RouteDetail() {
           )}
 
           {/* Related Knowledge */}
+          {unavailableKnowledge > 0 && (
+            <p role="status" className="mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+              {isChinese ? `${unavailableKnowledge} 条关联知识已删除或暂时无法读取；其余材料仍可查看。` : `${unavailableKnowledge} linked entries were deleted or could not be loaded; other entries remain available.`}
+              <button onClick={fetchRoute} className="ml-2 underline">{t('common.retry')}</button>
+            </p>
+          )}
           {knowledgeItems.length > 0 && (
             <div>
               <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">

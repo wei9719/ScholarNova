@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import axios from 'axios'
-import { agentApi, searchApi, papersApi, modelApi, healthApi } from '../client'
+import { agentApi, searchApi, papersApi, modelApi, healthApi, knowledgeApi } from '../client'
 
 // Mock axios
 vi.mock('axios', () => {
@@ -21,6 +21,28 @@ vi.mock('axios', () => {
 })
 
 describe('API Client', () => {
+  describe('knowledgeApi', () => {
+    it('passes pagination and server-side keywords while preserving optional categories', async () => {
+      const mockedAxios = vi.mocked(axios.create())
+      await knowledgeApi.list('食品', { page: 2, page_size: 20, keyword: '混合检索' })
+      expect(mockedAxios.get).toHaveBeenCalledWith('/knowledge', {
+        params: { category: '食品', page: 2, page_size: 20, keyword: '混合检索' },
+      })
+      await knowledgeApi.list()
+      expect(mockedAxios.get).toHaveBeenLastCalledWith('/knowledge', { params: {} })
+    })
+
+    it('preserves optional user research goals when submitting selected knowledge', async () => {
+      const mockedAxios = vi.mocked(axios.create())
+      await knowledgeApi.aiAnalyze(['k1'], '仅比较数据隐私风险')
+      expect(mockedAxios.post).toHaveBeenLastCalledWith('/knowledge/ai-analyze', {
+        knowledge_ids: ['k1'], query: '仅比较数据隐私风险',
+      })
+      await knowledgeApi.aiAnalyze(['k1'])
+      expect(mockedAxios.post).toHaveBeenLastCalledWith('/knowledge/ai-analyze', { knowledge_ids: ['k1'] })
+    })
+  })
+
   describe('searchApi', () => {
     it('should call POST /search with request body', async () => {
       const mockResponse = {
@@ -198,6 +220,18 @@ describe('API Client', () => {
   })
 
   describe('agentApi', () => {
+    it('passes an explicit knowledge scope and preserves null for all material', async () => {
+      const mockedAxios = vi.mocked(axios.create())
+      await agentApi.chat({ question: '比较方法', knowledge_category: '食品', use_zotero: false })
+      expect(mockedAxios.post).toHaveBeenLastCalledWith('/agent/chat', {
+        question: '比较方法', knowledge_category: '食品', use_zotero: false,
+      }, { signal: undefined })
+      await agentApi.chat({ question: '比较方法', knowledge_category: null })
+      expect(mockedAxios.post).toHaveBeenLastCalledWith('/agent/chat', {
+        question: '比较方法', knowledge_category: null,
+      }, { signal: undefined })
+    })
+
     it('should call POST /agent/chat with selected local sources', async () => {
       const mockedAxios = vi.mocked(axios.create())
       mockedAxios.post.mockResolvedValue({ data: { answer: 'Grounded answer' } })

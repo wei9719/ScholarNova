@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Plus, Search, BookMarked, FolderOpen, Route,
@@ -31,37 +31,78 @@ export default function Knowledge() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [routesLoading, setRoutesLoading] = useState(false)
+  const [routesError, setRoutesError] = useState(false)
+  const [routesPage, setRoutesPage] = useState(1)
+  const [routesTotal, setRoutesTotal] = useState(0)
+  const routesFetchSequence = useRef(0)
+  const [page, setPage] = useState(1)
+  const [keyword, setKeyword] = useState(searchQuery.trim())
+  const fetchSequence = useRef(0)
+  const pageSize = 20
+
+  useEffect(() => {
+    const nextKeyword = searchQuery.trim()
+    if (nextKeyword === keyword) return
+    const timer = window.setTimeout(() => {
+      setKeyword(nextKeyword)
+      setPage(1)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery, keyword])
 
   const fetchItems = useCallback(async () => {
+    const sequence = ++fetchSequence.current
     setLoading(true)
     setError(null)
     try {
-      const response = await knowledgeApi.list(selectedCategory || undefined)
+      const response = await knowledgeApi.list(selectedCategory || undefined, {
+        page, page_size: pageSize, ...(keyword ? { keyword } : {}),
+      })
+      if (sequence !== fetchSequence.current) return
+      const lastPage = Math.max(1, Math.ceil(response.data.total / pageSize))
+      if (page > lastPage) {
+        setPage(lastPage)
+        return
+      }
       setItems(response.data.items, response.data.total)
       setCategories(response.data.categories)
     } catch {
-      setError(t('common.error'))
+      if (sequence === fetchSequence.current) setError(t('common.error'))
     } finally {
-      setLoading(false)
+      if (sequence === fetchSequence.current) setLoading(false)
     }
-  }, [selectedCategory])
+  }, [selectedCategory, keyword, page])
 
   const fetchRoutes = useCallback(async () => {
+    const sequence = ++routesFetchSequence.current
     setRoutesLoading(true)
+    setRoutesError(false)
     try {
-      const response = await knowledgeApi.listRoutes()
-      setRoutes(response.data.items || response.data)
+      const response = await knowledgeApi.listRoutes({ page: routesPage, page_size: pageSize })
+      if (sequence !== routesFetchSequence.current) return
+      const lastPage = Math.max(1, Math.ceil(response.data.total / pageSize))
+      if (routesPage > lastPage) {
+        setRoutesPage(lastPage)
+        return
+      }
+      setRoutes(response.data.items)
+      setRoutesTotal(response.data.total)
     } catch {
-      // Routes may not be available yet
+      if (sequence === routesFetchSequence.current) setRoutesError(true)
     } finally {
-      setRoutesLoading(false)
+      if (sequence === routesFetchSequence.current) setRoutesLoading(false)
     }
-  }, [])
+  }, [routesPage])
 
   useEffect(() => {
     fetchItems()
+    return () => { fetchSequence.current += 1 }
+  }, [fetchItems])
+
+  useEffect(() => {
     fetchRoutes()
-  }, [fetchItems, fetchRoutes])
+    return () => { routesFetchSequence.current += 1 }
+  }, [fetchRoutes])
 
   const handleCreate = () => {
     setEditingItem(null)
@@ -87,16 +128,12 @@ export default function Knowledge() {
   }
 
 
-  const filteredItems = items.filter((item) => {
-    if (!searchQuery) return true
-    const q = searchQuery.toLowerCase()
-    return (
-      item.title.toLowerCase().includes(q) ||
-      item.content.toLowerCase().includes(q) ||
-      item.tags.some((tag) => tag.toLowerCase().includes(q)) ||
-      item.research_points.some((rp) => rp.toLowerCase().includes(q))
-    )
-  })
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const totalRoutePages = Math.max(1, Math.ceil(routesTotal / pageSize))
+  const chooseCategory = (category: string | null) => {
+    setPage(1)
+    setSelectedCategory(category)
+  }
 
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col">
@@ -121,7 +158,7 @@ export default function Knowledge() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t('knowledge.searchPlaceholder')}
+                placeholder={isChinese ? '搜索全部知识的标题和正文' : 'Search all knowledge titles and text'}
                 className="pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 w-48 sm:w-64"
               />
             </div>
@@ -153,7 +190,7 @@ export default function Knowledge() {
             </h3>
             <div className="space-y-0.5">
               <button
-                onClick={() => setSelectedCategory(null)}
+                onClick={() => chooseCategory(null)}
                 className={clsx(
                   'w-full flex items-center justify-between px-2 py-1.5 rounded-md text-sm transition-colors',
                   !selectedCategory
@@ -165,7 +202,7 @@ export default function Knowledge() {
                   <FolderOpen className="w-4 h-4" />
                   {t('knowledge.all')}
                 </span>
-                <span className="text-xs text-gray-400">{total}</span>
+                <span className="text-xs text-gray-400">{categories.reduce((sum, cat) => sum + cat.count, 0)}</span>
               </button>
               {categories.map((cat) => (
                 <div key={cat.name} className={clsx(
@@ -175,33 +212,19 @@ export default function Knowledge() {
                     : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                 )}>
                   <button
-                    onClick={() => setSelectedCategory(cat.name)}
+                    onClick={() => chooseCategory(cat.name)}
                     className="flex-1 flex items-center gap-2 text-left"
                   >
                     <FolderOpen className="w-4 h-4" />
                     {cat.name}
                     <span className="text-xs text-gray-400 ml-auto">{cat.count}</span>
                   </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      if (confirm(isChinese ? `确定删除分类「${cat.name}」及其中所有知识点吗？` : `Delete category "${cat.name}" and all its items?`)) {
-                        // 删除该分类下所有知识条目
-                        items.filter((i) => i.category === cat.name).forEach((i) => {
-                          knowledgeApi.delete(i.id).catch(() => {})
-                        })
-                        toast.success(isChinese ? `已删除分类「${cat.name}」` : `Deleted "${cat.name}"`)
-                        if (selectedCategory === cat.name) setSelectedCategory(null)
-                        setTimeout(fetchItems, 500)
-                      }
-                    }}
-                    className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity ml-1"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
                 </div>
               ))}
             </div>
+            <p className="mt-3 px-2 text-xs text-gray-400">
+              {isChinese ? '分类批量删除暂不可用，请在条目详情逐条确认删除。' : 'Bulk category deletion is unavailable. Delete individual entries from their details.'}
+            </p>
 
             {/* Routes Section */}
             <div className="mt-6">
@@ -211,6 +234,13 @@ export default function Knowledge() {
               {routesLoading ? (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                </div>
+              ) : routesError ? (
+                <div role="alert" className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                  <p>{isChinese ? '研究路线加载失败，尚无法确认列表。' : 'Research routes could not be loaded; the list is unavailable.'}</p>
+                  <button onClick={fetchRoutes} aria-label={isChinese ? '重试加载研究路线' : 'Retry loading research routes'} className="mt-1 underline">
+                    {t('common.retry')}
+                  </button>
                 </div>
               ) : routes.length > 0 ? (
                 <div className="space-y-0.5">
@@ -243,6 +273,19 @@ export default function Knowledge() {
               ) : (
                 <p className="text-xs text-gray-400 px-2">{t('common.noData')}</p>
               )}
+              {!routesError && (
+                <nav aria-label={isChinese ? '研究路线分页' : 'Research route pagination'} className="mt-3 px-2 text-xs text-gray-500">
+                  <p>{isChinese ? `共 ${routesTotal} 条路线 · 第 ${routesPage} / ${totalRoutePages} 页` : `${routesTotal} routes · Page ${routesPage} / ${totalRoutePages}`}</p>
+                  <div className="mt-2 flex gap-2">
+                    <button aria-label={isChinese ? '上一页路线' : 'Previous routes page'} disabled={routesLoading || routesPage <= 1} onClick={() => setRoutesPage((value) => value - 1)} className="rounded border px-2 py-1 disabled:opacity-40">
+                      {isChinese ? '上一页' : 'Previous'}
+                    </button>
+                    <button aria-label={isChinese ? '下一页路线' : 'Next routes page'} disabled={routesLoading || routesPage >= totalRoutePages} onClick={() => setRoutesPage((value) => value + 1)} className="rounded border px-2 py-1 disabled:opacity-40">
+                      {isChinese ? '下一页' : 'Next'}
+                    </button>
+                  </div>
+                </nav>
+              )}
             </div>
           </div>
         </div>
@@ -262,20 +305,20 @@ export default function Knowledge() {
               </div>
             )}
 
-            {loading && items.length === 0 ? (
+            {loading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <div key={i} className="skeleton h-28 rounded-lg" />
                 ))}
               </div>
-            ) : filteredItems.length === 0 ? (
+            ) : items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <BookMarked className="w-16 h-16 text-gray-200 dark:text-gray-700 mb-4" />
                 <h3 className="text-lg font-medium text-gray-600 dark:text-gray-400 mb-2">
-                  {t('knowledge.empty')}
+                  {keyword ? (isChinese ? '没有匹配的知识条目' : 'No matching knowledge entries') : t('knowledge.empty')}
                 </h3>
                 <p className="text-sm text-gray-400 dark:text-gray-500 max-w-sm mb-6">
-                  {t('knowledge.emptyDesc')}
+                  {keyword ? (isChinese ? '已搜索所选范围的全部标题与正文，请调整关键词。' : 'All titles and text in the selected scope were searched. Try another keyword.') : t('knowledge.emptyDesc')}
                 </p>
                 <button
                   onClick={handleCreate}
@@ -287,7 +330,7 @@ export default function Knowledge() {
               </div>
             ) : (
               <div className="space-y-3">
-                {filteredItems.map((item) => (
+                {items.map((item) => (
                   <KnowledgeCard
                     key={item.id}
                     item={item}
@@ -297,6 +340,17 @@ export default function Knowledge() {
                 ))}
               </div>
             )}
+            <nav aria-label={isChinese ? '知识库分页' : 'Knowledge pagination'} className="mt-4 flex items-center justify-between gap-3 text-sm text-gray-500">
+              <span>{isChinese ? `共 ${total} 条 · 第 ${page} / ${totalPages} 页` : `${total} entries · Page ${page} / ${totalPages}`}</span>
+              <div className="flex gap-2">
+                <button disabled={loading || page <= 1} onClick={() => setPage((value) => value - 1)} className="rounded border px-3 py-1.5 disabled:opacity-40">
+                  {isChinese ? '上一页' : 'Previous'}
+                </button>
+                <button disabled={loading || page >= totalPages} onClick={() => setPage((value) => value + 1)} className="rounded border px-3 py-1.5 disabled:opacity-40">
+                  {isChinese ? '下一页' : 'Next'}
+                </button>
+              </div>
+            </nav>
           </div>
         </div>
       </div>

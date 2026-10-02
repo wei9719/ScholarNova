@@ -4,10 +4,11 @@ import type { AgentChatResponse } from '@/api/types'
 import { useAssistantStore } from '@/stores/assistantStore'
 import ResearchAssistant from '../ResearchAssistant'
 
-const mocks = vi.hoisted(() => ({ chat: vi.fn(), zoteroStatus: vi.fn() }))
+const mocks = vi.hoisted(() => ({ chat: vi.fn(), zoteroStatus: vi.fn(), categories: vi.fn() }))
 vi.mock('@/api/client', () => ({
   agentApi: { chat: mocks.chat },
   zoteroApi: { status: mocks.zoteroStatus },
+  knowledgeApi: { getCategories: mocks.categories },
 }))
 vi.mock('@/stores/localeStore', () => ({ useLocaleStore: () => ({ locale: 'zh' }) }))
 
@@ -40,6 +41,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   mocks.chat.mockResolvedValue({ data: productHelp })
   mocks.zoteroStatus.mockResolvedValue({ data: { connected: true } })
+  mocks.categories.mockResolvedValue({ data: [{ name: '食品', count: 2 }, { name: '交通', count: 3 }] })
   HTMLElement.prototype.scrollIntoView = vi.fn()
   window.scrollTo = vi.fn()
   localStorage.clear()
@@ -298,6 +300,7 @@ it('sends only the active conversation\'s latest six messages for a follow-up', 
     history: previousMessages.slice(-6).map(({ role, content }) => ({ role, content })),
     use_knowledge: true,
     use_zotero: true,
+    knowledge_category: null,
   }, expect.any(AbortSignal))
 })
 
@@ -344,7 +347,7 @@ it('retries one turn without duplicate context and retains every previous usage 
   expect(mocks.chat).toHaveBeenCalledWith({
     question: '我该如何使用你？',
     history: previousMessages.slice(-6).map(({ role, content }) => ({ role, content })),
-    use_knowledge: true, use_zotero: true,
+    use_knowledge: true, use_zotero: true, knowledge_category: null,
   }, expect.any(AbortSignal))
   await act(async () => { resolveChat({ data: reportedFailure }) })
 
@@ -358,6 +361,7 @@ it('retries one turn without duplicate context and retains every previous usage 
   expect(messages.filter((message) => message.id === 'retry-question')).toHaveLength(1)
   expect(messages[messages.length - 1]).toEqual({
     id: 'retry-answer', role: 'assistant', content: modelHelp.answer, result: modelHelp,
+    knowledgeCategory: null, scopeRevision: 0,
     priorResults: [failedHelp, reportedFailure],
   })
   expect(screen.getByText('Token: 123（已返回的用量）')).toBeInTheDocument()
@@ -462,4 +466,234 @@ it.each(['clear', 'delete'])('does not append when its conversation is %s in sha
   await act(async () => { finish({ data: productHelp }) })
   expect(useAssistantStore.getState().conversations.every(conversation => conversation.messages.length === 0)).toBe(true)
   expect(screen.queryByText(productHelp.answer)).not.toBeInTheDocument()
+})
+
+it('sends the selected category, records its scope and visibly excludes Zotero', async () => {
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  fireEvent.change(screen.getByRole('combobox', { name: '知识库资料分类' }), { target: { value: '食品' } })
+
+  expect(screen.getByText('研究文件夹仅整理对话，不决定资料范围。')).toBeInTheDocument()
+  expect(screen.getByText('仅检索所选分类的知识与关联 PDF，不包含 Zotero。')).toBeInTheDocument()
+  const zotero = screen.getByRole('button', { name: /本机 Zotero/ })
+  expect(zotero).toBeDisabled()
+  expect(zotero).toHaveAttribute('aria-pressed', 'false')
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '比较食品论文' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await screen.findByText(productHelp.answer)
+
+  expect(mocks.chat).toHaveBeenCalledWith({
+    question: '比较食品论文', history: [], use_knowledge: true, use_zotero: false, knowledge_category: '食品',
+  }, expect.any(AbortSignal))
+  const conversation = useAssistantStore.getState().conversations[0]
+  expect(conversation).toMatchObject({ knowledgeCategory: '食品', scopeRevision: 1 })
+  expect(conversation.messages.map(({ knowledgeCategory, scopeRevision }) => ({ knowledgeCategory, scopeRevision })))
+    .toEqual([{ knowledgeCategory: '食品', scopeRevision: 1 }, { knowledgeCategory: '食品', scopeRevision: 1 }])
+  expect(screen.getByText('资料范围: 食品')).toBeInTheDocument()
+})
+
+it('restores each chat scope and never infers it from a research folder', async () => {
+  const store = useAssistantStore.getState()
+  const folder = store.createFolder('食品')
+  store.appendMessage('guide-chat', { id: 'a', role: 'user', content: '食品对话' })
+  store.setKnowledgeCategory('guide-chat', '食品')
+  const trafficChat = store.createConversation(folder)
+  store.appendMessage(trafficChat, { id: 'b', role: 'user', content: '交通对话' })
+  store.setKnowledgeCategory(trafficChat, '交通')
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '交通 (3)' })
+
+  const category = screen.getByRole('combobox', { name: '知识库资料分类' })
+  expect(category).toHaveValue('交通')
+  fireEvent.change(screen.getByRole('combobox', { name: '所属文件夹' }), { target: { value: '' } })
+  expect(category).toHaveValue('交通')
+  fireEvent.click(screen.getByRole('button', { name: '食品对话' }))
+  expect(category).toHaveValue('食品')
+  fireEvent.click(screen.getByRole('button', { name: '交通对话' }))
+  expect(category).toHaveValue('交通')
+  expect(mocks.chat).not.toHaveBeenCalled()
+})
+
+it('keeps old answers visible but excludes them and their retry after a scope change', async () => {
+  appendFailedTurn()
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  expect(screen.getByRole('button', { name: '再次调用 AI' })).toBeInTheDocument()
+  const category = screen.getByRole('combobox', { name: '知识库资料分类' })
+  fireEvent.change(category, { target: { value: '食品' } })
+
+  expect(screen.getByText(failedHelp.answer)).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '再次调用 AI' })).not.toBeInTheDocument()
+  expect(screen.getByText(/历史范围 · 仅供查看，不作为当前上下文/)).toBeInTheDocument()
+  expect(screen.getByText('资料范围已切换，后续问题不携带之前范围的对话。')).toBeInTheDocument()
+
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '食品研究问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await screen.findByText(productHelp.answer)
+  expect(mocks.chat.mock.calls[0][0].history).toEqual([])
+
+  // Changing back to a previous category starts a new context revision too.
+  fireEvent.change(category, { target: { value: '交通' } })
+  fireEvent.change(category, { target: { value: '食品' } })
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '新的食品研究问题' } })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '发送' })) })
+  expect(mocks.chat.mock.calls[1][0]).toMatchObject({ history: [], knowledge_category: '食品' })
+  expect(useAssistantStore.getState().conversations[0].messages).toHaveLength(6)
+})
+
+it('passes only current-scope history on follow-up and retry', async () => {
+  appendFailedTurn()
+  const store = useAssistantStore.getState()
+  store.setKnowledgeCategory('guide-chat', '食品')
+  store.appendMessage('guide-chat', { id: 'food-q1', role: 'user', content: '食品前问', knowledgeCategory: '食品', scopeRevision: 1 })
+  store.appendMessage('guide-chat', { id: 'food-a1', role: 'assistant', content: '食品前答', knowledgeCategory: '食品', scopeRevision: 1 })
+  mocks.chat.mockResolvedValueOnce({ data: failedHelp })
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '食品追问' } })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '发送' })) })
+  const expectedHistory = [{ role: 'user', content: '食品前问' }, { role: 'assistant', content: '食品前答' }]
+  expect(mocks.chat.mock.calls[0][0].history).toEqual(expectedHistory)
+
+  fireEvent.click(screen.getByRole('button', { name: '再次调用 AI' }))
+  await screen.findByText(productHelp.answer)
+  expect(mocks.chat.mock.calls[1][0]).toMatchObject({ history: expectedHistory, knowledge_category: '食品', use_zotero: false })
+})
+
+it('locks scope controls while sending, including change events on a disabled selector', async () => {
+  let finish!: (value: { data: AgentChatResponse }) => void
+  mocks.chat.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  const category = screen.getByRole('combobox', { name: '知识库资料分类' })
+  fireEvent.change(category, { target: { value: '食品' } })
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '食品研究问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+  expect(category).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'ScholarNova 知识库' })).toBeDisabled()
+  fireEvent.change(category, { target: { value: '交通' } })
+  expect(useAssistantStore.getState().conversations[0].knowledgeCategory).toBe('食品')
+  await act(async () => { finish({ data: productHelp }) })
+  expect(category).toBeEnabled()
+  expect(category).toHaveValue('食品')
+})
+
+it('drops a late answer if shared state changes the scope while its request is pending', async () => {
+  let finish!: (value: { data: AgentChatResponse }) => void
+  mocks.chat.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '旧范围问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  act(() => { useAssistantStore.getState().setKnowledgeCategory('guide-chat', '食品') })
+  await act(async () => { finish({ data: productHelp }) })
+
+  expect(screen.queryByText(productHelp.answer)).not.toBeInTheDocument()
+  expect(useAssistantStore.getState().conversations[0].messages).toHaveLength(1)
+  expect(screen.getByRole('combobox', { name: '知识库资料分类' })).toHaveValue('食品')
+})
+
+it.each(['missing', 'error'])('preserves an existing category when the category list is %s', async (condition) => {
+  useAssistantStore.getState().setKnowledgeCategory('guide-chat', '已删除分类')
+  if (condition === 'error') mocks.categories.mockRejectedValueOnce(new Error('offline'))
+  render(<ResearchAssistant />)
+  if (condition === 'error') await screen.findByText(/分类列表读取失败，已保留当前范围/)
+  else await screen.findByText('该分类已不存在或暂无资料')
+
+  expect(screen.getByRole('combobox', { name: '知识库资料分类' })).toHaveValue('已删除分类')
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '总结当前范围' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await screen.findByText(productHelp.answer)
+  expect(mocks.chat.mock.calls[0][0]).toMatchObject({ knowledge_category: '已删除分类', use_zotero: false })
+})
+
+it('restores enabled sources when explicitly returning to all material without old-scope history', async () => {
+  useAssistantStore.getState().setKnowledgeCategory('guide-chat', '食品')
+  useAssistantStore.getState().appendMessage('guide-chat', {
+    id: 'old-food', role: 'user', content: '食品旧问题', knowledgeCategory: '食品', scopeRevision: 1,
+  })
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  fireEvent.change(screen.getByRole('combobox', { name: '知识库资料分类' }), { target: { value: '' } })
+  expect(screen.getByRole('button', { name: /本机 Zotero/ })).toBeEnabled()
+  expect(screen.getByRole('button', { name: /本机 Zotero/ })).toHaveAttribute('aria-pressed', 'true')
+
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '全库新问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await screen.findByText(productHelp.answer)
+  expect(mocks.chat.mock.calls[0][0]).toMatchObject({ history: [], knowledge_category: null, use_zotero: true })
+})
+
+it.each(['好', ' 🧠 '])('does not send or add a turn for a one-character question %j', async (question) => {
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  const input = screen.getByRole('textbox')
+  fireEvent.change(input, { target: { value: question } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+  expect(screen.getByText('请至少输入 2 个字符，再发送问题。')).toBeInTheDocument()
+  expect(input).toHaveValue(question)
+  expect(mocks.chat).not.toHaveBeenCalled()
+  expect(useAssistantStore.getState().conversations[0].messages).toHaveLength(0)
+
+  fireEvent.change(input, { target: { value: '如何开始' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await screen.findByText(productHelp.answer)
+  expect(screen.queryByText('请至少输入 2 个字符，再发送问题。')).not.toBeInTheDocument()
+  expect(mocks.chat).toHaveBeenCalledOnce()
+})
+
+it('renders FastAPI validation detail arrays safely and remains usable after a 422', async () => {
+  mocks.chat.mockRejectedValueOnce({ response: { status: 422, data: { detail: [
+    { type: 'string_too_long', loc: ['body', 'knowledge_category'], msg: '分类名称长度超过限制', input: 'PRIVATE_RAW_INPUT' },
+    { type: 'value_error', loc: ['body', 'question'], msg: '请检查问题内容' },
+  ] } } })
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '测试校验失败' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+  expect(await screen.findByText('分类名称长度超过限制；请检查问题内容')).toBeInTheDocument()
+  expect(screen.queryByText(/PRIVATE_RAW_INPUT/)).not.toBeInTheDocument()
+  expect(screen.getByRole('textbox')).toBeInTheDocument()
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '重新尝试' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await screen.findByText(productHelp.answer)
+  expect(mocks.chat).toHaveBeenCalledTimes(2)
+})
+
+it.each([[{ unexpected: { value: 'private input' } }], { unexpected: true }, null])('uses a safe fallback for unrecognized error detail %j', async (detail) => {
+  mocks.chat.mockRejectedValueOnce({ response: { data: { detail } } })
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '测试错误格式' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  expect(await screen.findByText('智能体暂时无法回答，请检查模型和 Zotero 设置。')).toBeInTheDocument()
+  expect(screen.getByRole('textbox')).toBeInTheDocument()
+})
+
+it('does not show a previous chat failure in the newly selected chat or fabricate a reply', async () => {
+  const otherChat = useAssistantStore.getState().createConversation()
+  useAssistantStore.getState().appendMessage(otherChat, { id: 'other-q', role: 'user', content: '会话B的问题' })
+  useAssistantStore.getState().setActiveConversation('guide-chat')
+  let rejectChat!: (reason: unknown) => void
+  mocks.chat.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectChat = reject }))
+  render(<ResearchAssistant />)
+  await screen.findByRole('option', { name: '食品 (2)' })
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '会话A的问题' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  fireEvent.click(screen.getByRole('button', { name: '会话B的问题' }))
+  await act(async () => { rejectChat({ response: { data: { detail: '仅属于会话A的错误' } } }) })
+
+  expect(screen.queryByText('仅属于会话A的错误')).not.toBeInTheDocument()
+  expect(useAssistantStore.getState().conversations.find((chat) => chat.id === otherChat)?.messages)
+    .toEqual([{ id: 'other-q', role: 'user', content: '会话B的问题' }])
+  fireEvent.click(screen.getByRole('button', { name: '会话A的问题' }))
+  const original = useAssistantStore.getState().conversations.find((chat) => chat.id === 'guide-chat')!
+  expect(original.messages).toHaveLength(1)
+  expect(original.messages[0]).toMatchObject({ role: 'user', content: '会话A的问题' })
+  expect(screen.queryByText(productHelp.answer)).not.toBeInTheDocument()
+  expect(screen.queryByText('引用校验通过')).not.toBeInTheDocument()
+  expect(screen.queryByText(/正在处理问题/)).not.toBeInTheDocument()
 })

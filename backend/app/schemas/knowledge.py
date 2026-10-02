@@ -129,8 +129,8 @@ class RouteListResponse(BaseModel):
 
 class AIAnalyzeRequest(BaseModel):
     """AI分析研究推进方向请求"""
-    knowledge_ids: List[str] = Field(..., description="基于哪些知识点进行分析")
-    query: Optional[str] = Field(None, description="用户额外的分析要求")
+    knowledge_ids: List[str] = Field(..., min_length=1, max_length=50, description="基于哪些知识点进行分析")
+    query: Optional[str] = Field(None, max_length=2000, description="用户额外的分析要求")
 
 
 class AIAnalyzeResponse(BaseModel):

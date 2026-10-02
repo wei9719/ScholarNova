@@ -1,0 +1,309 @@
+{
+  "started_at": "2026-10-02T16:12:42.114166+00:00",
+  "scope": "Real cloud API through production gateway; synthetic prompts, not desktop end-to-end or saturation capacity.",
+  "limits": {
+    "requests": 12,
+    "max_tokens_each": 128,
+    "concurrency": [
+      1,
+      2,
+      3
+    ],
+    "retries": 0,
+    "fallback": false,
+    "timeout_seconds": 45
+  },
+  "network": {
+    "proxy_env_present": true
+  },
+  "stages": [
+    {
+      "concurrency": 1,
+      "requests": 2,
+      "completed": 2,
+      "wall_seconds": 24.027,
+      "latency_p50_seconds": 8.114,
+      "latency_p95_seconds": 15.903
+    },
+    {
+      "concurrency": 2,
+      "requests": 4,
+      "completed": 4,
+      "wall_seconds": 31.886,
+      "latency_p50_seconds": 15.682,
+      "latency_p95_seconds": 16.04
+    },
+    {
+      "concurrency": 3,
+      "requests": 6,
+      "completed": 6,
+      "wall_seconds": 47.032,
+      "latency_p50_seconds": 15.599,
+      "latency_p95_seconds": 37.822
+    }
+  ],
+  "requests": [
+    {
+      "case": "title_translation",
+      "task": "translation",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "concurrency": 1,
+      "transport_success": true,
+      "content_check": true,
+      "response": "面向科学文献综述的检索增强生成",
+      "finish_reason": "stop",
+      "elapsed_seconds": 15.903,
+      "usage": {
+        "prompt_tokens": 28,
+        "completion_tokens": 8,
+        "total_tokens": 36,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "grounded_answer",
+      "task": "assistant",
+      "provider": "siliconflow",
+      "model": "Qwen/Qwen3.6-27B",
+      "concurrency": 1,
+      "transport_success": true,
+      "content_check": true,
+      "response": "召回率为80%。[S1]",
+      "finish_reason": "stop",
+      "elapsed_seconds": 8.114,
+      "usage": {
+        "prompt_tokens": 53,
+        "completion_tokens": 10,
+        "total_tokens": 63,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "query_json",
+      "task": "query_planning",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "concurrency": 2,
+      "transport_success": true,
+      "content_check": true,
+      "response": "```json\n{\n  \"queries\": [\n    \"Large Language Models in food manufacturing\",\n    \"LLM applications in food industry\"\n  ]\n}\n```",
+      "finish_reason": "stop",
+      "elapsed_seconds": 15.682,
+      "usage": {
+        "prompt_tokens": 35,
+        "completion_tokens": 31,
+        "total_tokens": 66,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "product_help",
+      "task": "assistant",
+      "provider": "siliconflow",
+      "model": "Qwen/Qwen3.6-27B",
+      "concurrency": 2,
+      "transport_success": true,
+      "content_check": true,
+      "response": "先搜索文献，再分析论文，接着保存至知识库，最后按研究文件夹进行问答。",
+      "finish_reason": "stop",
+      "elapsed_seconds": 15.698,
+      "usage": {
+        "prompt_tokens": 53,
+        "completion_tokens": 20,
+        "total_tokens": 73,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "research_question",
+      "task": "recommendation",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "concurrency": 2,
+      "transport_success": true,
+      "content_check": true,
+      "response": "研究问题：小样本检索模型在跨领域数据上的性能是否显著下降？\n评价指标：跨领域平均召回率@10。",
+      "finish_reason": "stop",
+      "elapsed_seconds": 16.04,
+      "usage": {
+        "prompt_tokens": 34,
+        "completion_tokens": 27,
+        "total_tokens": 61,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "history_followup",
+      "task": "assistant",
+      "provider": "siliconflow",
+      "model": "Qwen/Qwen3.6-27B",
+      "concurrency": 2,
+      "transport_success": true,
+      "content_check": true,
+      "response": "建议选用NDCG、MAP和Recall@K。NDCG衡量排序质量，MAP评估平均精度，Recall@K关注召回率，三者结合可全面评估检索效果。",
+      "finish_reason": "stop",
+      "elapsed_seconds": 8.827,
+      "usage": {
+        "prompt_tokens": 56,
+        "completion_tokens": 41,
+        "total_tokens": 97,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "missing_evidence",
+      "task": "assistant",
+      "provider": "siliconflow",
+      "model": "Qwen/Qwen3.6-27B",
+      "concurrency": 3,
+      "transport_success": true,
+      "content_check": true,
+      "response": "材料[S1]未提及准确率，无法判断是否达到99%。",
+      "finish_reason": "stop",
+      "elapsed_seconds": 8.56,
+      "usage": {
+        "prompt_tokens": 50,
+        "completion_tokens": 16,
+        "total_tokens": 66,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "conflicting_evidence",
+      "task": "assistant",
+      "provider": "siliconflow",
+      "model": "Qwen/Qwen3.6-27B",
+      "concurrency": 3,
+      "transport_success": true,
+      "content_check": true,
+      "response": "否。S1报告A优于B，S2报告B优于A，结果取决于数据集，A并非总是更好。",
+      "finish_reason": "stop",
+      "elapsed_seconds": 23.29,
+      "usage": {
+        "prompt_tokens": 60,
+        "completion_tokens": 25,
+        "total_tokens": 85,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "paper_summary",
+      "task": "analysis",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "concurrency": 3,
+      "transport_success": true,
+      "content_check": true,
+      "response": "目标：降低检索延迟。\n方法：缓存重复查询。\n结果：100次合成查询平均耗时从200ms降至120ms。\n局限：未测真实用户。",
+      "finish_reason": "stop",
+      "elapsed_seconds": 37.822,
+      "usage": {
+        "prompt_tokens": 59,
+        "completion_tokens": 34,
+        "total_tokens": 93,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "long_input",
+      "task": "analysis",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "concurrency": 3,
+      "transport_success": true,
+      "content_check": true,
+      "response": "测试编号SN731，平均延迟120毫秒。",
+      "finish_reason": "stop",
+      "elapsed_seconds": 15.599,
+      "usage": {
+        "prompt_tokens": 1079,
+        "completion_tokens": 12,
+        "total_tokens": 1091,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "route_steps",
+      "task": "recommendation",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "concurrency": 3,
+      "transport_success": true,
+      "content_check": true,
+      "response": "1. 测试关键词检索\n2. 测试混合检索\n3. 对比检索效果",
+      "finish_reason": "stop",
+      "elapsed_seconds": 22.954,
+      "usage": {
+        "prompt_tokens": 34,
+        "completion_tokens": 20,
+        "total_tokens": 54,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    },
+    {
+      "case": "evidence_json",
+      "task": "analysis",
+      "provider": "zhipu",
+      "model": "glm-5.2",
+      "concurrency": 3,
+      "transport_success": true,
+      "content_check": true,
+      "response": "```json\n{\n  \"method\": \"采用混合检索\",\n  \"limitation\": \"未验证跨领域泛化\"\n}\n```",
+      "finish_reason": "stop",
+      "elapsed_seconds": 9.198,
+      "usage": {
+        "prompt_tokens": 35,
+        "completion_tokens": 28,
+        "total_tokens": 63,
+        "requests": 1,
+        "request_attempts": 1,
+        "responses_received": 1,
+        "usage_reports": 1
+      }
+    }
+  ],
+  "finished_at": "2026-10-02T16:14:31.099860+00:00",
+  "totals": {
+    "request_attempts": 12,
+    "responses_received": 12,
+    "usage_reports": 12,
+    "prompt_tokens": 1576,
+    "completion_tokens": 272,
+    "total_tokens": 1848
+  },
+  "billing_note": "Token counts are provider-reported, not a bill. Missing usage does not mean zero charge. Reasoning is disabled; output length was requested, not independently metered."
+}

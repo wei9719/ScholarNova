@@ -1,0 +1,82 @@
+{
+  "started_at": "2026-10-02T16:24:42.243007+00:00",
+  "scope": "One real read-only search per academic source and local Zotero read connectivity, no LLM or write calls.",
+  "query": "Attention Is All You Need",
+  "proxy_env_present": true,
+  "sources": [
+    {
+      "source": "crossref",
+      "key_configured": false,
+      "http_statuses": [
+        200
+      ],
+      "outbound_attempts": 1,
+      "result_count": 5,
+      "status": "results",
+      "source_error_present": false,
+      "exact_title_match": false,
+      "cache_hit_possible": false,
+      "elapsed_seconds": 20.825
+    },
+    {
+      "source": "openalex",
+      "key_configured": false,
+      "http_statuses": [
+        200
+      ],
+      "outbound_attempts": 1,
+      "result_count": 5,
+      "status": "results",
+      "source_error_present": false,
+      "exact_title_match": true,
+      "cache_hit_possible": false,
+      "elapsed_seconds": 13.517
+    },
+    {
+      "source": "semantic_scholar",
+      "key_configured": false,
+      "http_statuses": [
+        429
+      ],
+      "outbound_attempts": 1,
+      "quota_before": {
+        "last_status": 429,
+        "last_success_age_seconds": null,
+        "cooldown_remaining_seconds": 0.0
+      },
+      "result_count": 0,
+      "status": "error",
+      "source_error_present": true,
+      "exact_title_match": false,
+      "cache_hit_possible": false,
+      "elapsed_seconds": 6.478,
+      "quota_after": {
+        "last_status": 429,
+        "last_success_age_seconds": null,
+        "cooldown_remaining_seconds": 5.917938947677612
+      }
+    },
+    {
+      "source": "arxiv",
+      "key_configured": false,
+      "http_statuses": [
+        200
+      ],
+      "outbound_attempts": 1,
+      "result_count": 5,
+      "status": "results",
+      "source_error_present": false,
+      "exact_title_match": false,
+      "cache_hit_possible": false,
+      "elapsed_seconds": 4.3
+    }
+  ],
+  "zotero": {
+    "connected": false,
+    "writes_attempted": 0,
+    "error_type": "ConnectError",
+    "http_status": null,
+    "elapsed_seconds": 2.598
+  },
+  "finished_at": "2026-10-02T16:25:05.850772+00:00"
+}

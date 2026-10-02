@@ -8,6 +8,8 @@
 
 **当前源码：1.2.7，尚未发布安装包。** 本轮优先改善多任务使用体验：限制同时运行和排队的重任务，修复迟到回答、PDF 阻塞和缓存冲突。已发布下载仍以 Release 附件为准，不会自动更新你已安装的软件。详见 [本轮验证与使用测试](docs/reports/v1.2.7-concurrency.zh-CN.md) 和 [13 个同类项目对标及后续路线](docs/research/peer-landscape-2026-10-02.zh-CN.md)。本地大模型接入暂缓，不影响现有云模型配置。
 
+**真实 API 验证（10 月 3 日）**：GLM/千问 12 次短文本调用完成，服务商报告 1,848 Token；Semantic Scholar 匿名请求仍出现 429。详见 [全场景覆盖、真实耗时与待验证项目](docs/reports/live-api-scenarios-2026-10-03.zh-CN.md)。这不是全功能端到端通过或真实高并发容量承诺。
+
 ## 下载与安装
 
 **[v1.2.5 已发布](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5)**：提供 Windows x64、Intel Mac、Apple Silicon Mac 安装包、Windows 便携版，以及同版本源码和 SHA256 校验文件。新增失败指导原位重试，保留历史用量，精简模型上下文，并改善便携版解压启动。详见 [发布与验收报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。

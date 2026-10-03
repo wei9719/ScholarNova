@@ -1,4 +1,5 @@
 import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useSearchStore } from '@/stores/searchStore'
@@ -36,12 +37,94 @@ vi.mock('@/components/PaperDetail/PaperDetail', () => ({
 
 beforeEach(() => {
   vi.resetAllMocks()
+  sessionStorage.clear()
   useSearchStore.getState().clearSearch()
   api.create.mockResolvedValue({ data: { run_id: 'run' } })
   api.getRun.mockResolvedValue({ data: { run_id: 'run', status: 'completed', results: [{ id: 'a' }], query: 'traffic' } })
 })
 
 afterEach(cleanup)
+
+it('sends automatic planning for an existing query URL without a mode', async () => {
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  await screen.findByText('Paper A')
+  expect(screen.getByRole('combobox', { name: '检索规划' })).toHaveValue('auto')
+  expect(api.create).toHaveBeenCalledWith({ query: 'traffic', planning_mode: 'auto' })
+})
+
+it('uses the real SearchBar to submit fast search and repeat the same query with AI planning', async () => {
+  const user = userEvent.setup()
+  render(<MemoryRouter initialEntries={['/search']}><Search /></MemoryRouter>)
+  const mode = screen.getByRole('combobox', { name: '检索规划' })
+  await act(async () => { await user.selectOptions(mode, 'rules') })
+  expect(screen.getByText(/快速检索不调用规划模型/)).toBeInTheDocument()
+  expect(api.create).not.toHaveBeenCalled()
+  await act(async () => { await user.type(screen.getByRole('textbox'), 'traffic{Enter}') })
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenNthCalledWith(1, { query: 'traffic', planning_mode: 'rules' })
+
+  await act(async () => { await user.selectOptions(mode, 'ai') })
+  expect(api.create).toHaveBeenCalledTimes(1)
+  expect(screen.getByText(/这不是整个搜索的总时限/)).toBeInTheDocument()
+  await act(async () => { await user.click(screen.getByRole('button', { name: '搜索' })) })
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenNthCalledWith(2, { query: 'traffic', planning_mode: 'ai' })
+  await act(async () => { await user.click(screen.getByRole('button', { name: '搜索' })) })
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenNthCalledWith(3, { query: 'traffic', planning_mode: 'ai' })
+  expect(screen.getByRole('textbox')).toHaveValue('traffic')
+})
+
+it('locks planning mode while searching and makes it available after completion', async () => {
+  let finish!: (value: any) => void
+  api.create.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  const mode = screen.getByRole('combobox', { name: '检索规划' })
+  expect(mode).toBeDisabled()
+  fireEvent.change(mode, { target: { value: 'ai' } })
+  expect(mode).toHaveValue('auto')
+  expect(api.create).toHaveBeenCalledOnce()
+  expect(api.create).toHaveBeenCalledWith({ query: 'traffic', planning_mode: 'auto' })
+  await act(async () => { finish({ data: { run_id: 'run' } }) })
+  await screen.findByText('Paper A')
+  expect(mode).toBeEnabled()
+})
+
+it('restores an old recent query to the real SearchBar and can repeat it with another planning mode', async () => {
+  sessionStorage.setItem('scholarnova-search-history', JSON.stringify([{ query: 'previous topic', at: 1 }]))
+  render(<MemoryRouter initialEntries={['/search']}><Search /></MemoryRouter>)
+  fireEvent.click(screen.getByRole('button', { name: 'previous topic' }))
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenCalledWith({ query: 'previous topic', planning_mode: 'auto' })
+  expect(screen.getByRole('textbox')).toHaveValue('previous topic')
+  expect(screen.getByRole('button', { name: '搜索' })).toBeEnabled()
+  fireEvent.change(screen.getByRole('combobox', { name: '检索规划' }), { target: { value: 'rules' } })
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenNthCalledWith(2, { query: 'previous topic', planning_mode: 'rules' })
+})
+
+it('shows validation messages safely and permits retry after search creation returns 422', async () => {
+  api.create.mockRejectedValueOnce({ response: { status: 422, data: { detail: [
+    { msg: '检索条件格式不正确', input: 'PRIVATE_INPUT' },
+  ] } } })
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  expect(await screen.findByText('检索条件格式不正确')).toBeInTheDocument()
+  expect(screen.queryByText(/PRIVATE_INPUT/)).not.toBeInTheDocument()
+  expect(screen.getByRole('textbox')).toBeInTheDocument()
+  expect(useSearchStore.getState().isLoading).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenCalledTimes(2)
+})
+
+it('shows structured polling errors as text without losing the search controls', async () => {
+  api.getRun.mockRejectedValueOnce({ response: { data: { detail: { code: 'queue_full', message: '服务繁忙，请稍后重新检索', retry_after: 2 } } } })
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  expect(await screen.findByText('服务繁忙，请稍后重新检索')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '搜索' })).toBeEnabled()
+  expect(useSearchStore.getState().isLoading).toBe(false)
+})
 
 it('shows the actionable backend queue timeout instead of telling users to change keywords', async () => {
   api.getRun.mockResolvedValue({ data: {

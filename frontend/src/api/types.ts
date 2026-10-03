@@ -5,6 +5,7 @@
 export type DataSource = 'semantic_scholar' | 'openalex' | 'crossref' | 'arxiv' | 'zotero'
 
 export type SearchStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type SearchPlanningMode = 'auto' | 'rules' | 'ai'
 
 export type Verdict = 'supports' | 'contradicts' | 'neutral' | 'insufficient'
 
@@ -20,6 +21,7 @@ export type LLMProvider = 'openai' | 'anthropic' | 'ollama' | 'local' | 'mimo' |
 
 export interface SearchRequest {
   query: string
+  planning_mode?: SearchPlanningMode
   max_results?: number
   sources?: DataSource[]
   date_from?: string

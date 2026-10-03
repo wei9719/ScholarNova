@@ -8,7 +8,7 @@ Chinese developer learning guide: [Understand ScholarNova step by step](docs/PRO
 
 A desktop research workspace for individuals: **find papers → read full text → save evidence → ask grounded questions → plan research**. Chinese / English, light / dark themes, and bring-your-own-key model configuration.
 
-**Current source: 1.2.8; installers are not yet released.** This round connects real research tasks: paginated knowledge and routes, user requirements passed into analysis, explicit full-result saving, and per-conversation evidence categories. See the [business workflow and acceptance checklist](docs/reports/v1.2.8-research-workflow.zh-CN.md), earlier [concurrency improvements](docs/reports/v1.2.7-concurrency.zh-CN.md), and [13-project comparison](docs/research/peer-landscape-2026-10-02.zh-CN.md). Release assets remain the available downloads; source changes do not upgrade an installed app. Zotero improvements and local-model integration are paused; existing settings are unchanged.
+**Current source: 1.2.9; installers are not yet released.** Choose automatic, fast or AI search planning; see explicit paper-excerpt limits; release database connections before remote model waits; reject stale route saves; and validate downloaded diagrams before reporting success. See the [changes and acceptance checklist](docs/reports/v1.2.9-search-analysis-reliability.zh-CN.md), [research workflow](docs/reports/v1.2.8-research-workflow.zh-CN.md), earlier [concurrency improvements](docs/reports/v1.2.7-concurrency.zh-CN.md), and [13-project comparison](docs/research/peer-landscape-2026-10-02.zh-CN.md). Release assets remain the available downloads; source changes do not upgrade an installed app. Zotero improvements and local-model integration are paused; existing settings are unchanged.
 
 **Live API checks (October 3):** 12 short GLM/Qwen requests completed with 1,848 provider-reported tokens; an anonymous Semantic Scholar request still returned 429. See the [scenario coverage, timings and outstanding checks](docs/reports/live-api-scenarios-2026-10-03.zh-CN.md). This is not a full end-to-end acceptance or production concurrency claim.
 
@@ -38,8 +38,8 @@ This build requires macOS 13 or later, following [Electron 44's platform require
 ## Your first workflow
 
 1. **Configure a model**: in Settings, select GLM, Qwen, SiliconFlow or another supported provider. Enter your key and an available model ID, test, then save.
-2. **Find papers**: enter a research question. Watch elapsed time, actual sources, counts and source status. You can run the same query again.
-3. **Read full text**: select a paper and analyze it. If open full text is unavailable, import an authorized PDF. The UI distinguishes abstract, full text and image-page coverage.
+2. **Find papers**: automatic planning sends short topics directly to search; fast mode skips the planning model; AI mode makes one attempt with an approximately 20-second model-stage budget and then falls back to rules. This is not a total search deadline. Watch actual sources, elapsed time, counts and source status. The same query can run again, with or without changing mode.
+3. **Read full text**: select a paper and analyze it. If open full text is unavailable, import an authorized PDF. Obtaining a PDF does not mean the model read it all: analysis discloses selected sections, truncated text and the image pages actually supplied.
 4. **Build knowledge**: save categorized findings, create an Assistant conversation, and choose its evidence category. Chat folders organize conversations; evidence scope controls retrieval. After changing scope, previous messages remain visible but are excluded from the new model context.
 5. **Plan research**: select knowledge entries and enter your research goals and constraints. Review the analysis, then explicitly save its full text and source links as a research route before generating diagrams. Text, vision and diagram tasks can use separate models.
 

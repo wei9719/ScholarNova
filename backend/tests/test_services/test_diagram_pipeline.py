@@ -69,6 +69,13 @@ async def test_route_persists_successful_roadmap_image(monkeypatch, architecture
     monkeypatch.setattr(route_pipeline, "_resolve_route_context", AsyncMock(return_value={
         "route": route, "knowledge_list": [], "knowledge_text": "频域交通预测",
     }))
+
+    async def save_result(snapshot, combined, db):
+        snapshot.ai_analysis = combined
+        await db.commit()
+        return vars(snapshot).copy()
+
+    monkeypatch.setattr(route_pipeline, "_save_route_result", save_result)
     monkeypatch.setattr(config, "get_model_for_task", lambda _task: {
         "provider": "test", "model": "test-model", "api_key": "", "base_url": "",
     })

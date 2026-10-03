@@ -4,6 +4,17 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.9 source — search and analysis reliability
+
+- Add automatic, fast and explicit AI planning modes. Short topics skip planning-model calls; AI planning uses one approximately 20-second attempt, no SDK retry or alternate model, and a deterministic fallback. Record actual planning decisions without treating missing usage as free.
+- Keep repeated same-query searches and mode changes usable; restore a recent query into the actual search input. Safely render structured API failures in Search, Settings and task-model testing.
+- Disclose selected sections, text limits, figure/table excerpts and supplied image-page counts in paper analysis. A full-text source does not mean the model received the entire paper.
+- Release read-only database connections before knowledge analysis, recommendations, PDF downloads and route generation. Publish route results with a conditional update so deleted or edited routes cannot be overwritten by stale runs.
+- Give each route-generation run independent image files. Validate image downloads even for capability checks; bound response sizes, reject HTTP-compressed bodies before decompression, and atomically save decoded PNG files without replacing prior images on failure. Explicit profiles never borrow another provider's credentials.
+- Allow read-only integration probes to select academic sources and skip Zotero entirely.
+
+See [validation and manual scenarios](docs/reports/v1.2.9-search-analysis-reliability.zh-CN.md). No new paid model calls or changes to installed-app data, model profiles or the separate LLM-Twin project.
+
 ### 1.2.8 source — usable research workflows
 
 - Paginate both knowledge entries and research routes; search knowledge on the server instead of filtering only the first page. Load linked route sources by their IDs and report missing sources separately.

@@ -5,6 +5,7 @@
 import asyncio
 import logging
 from datetime import datetime
+from types import SimpleNamespace
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -38,6 +39,27 @@ from app.schemas.knowledge import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _analysis_knowledge_snapshot(db: AsyncSession, knowledge_ids: list[str]) -> list:
+    """Release read-only connections before remote work, including fallbacks."""
+    items = []
+    try:
+        for kid in knowledge_ids:
+            knowledge = (await db.execute(
+                select(KnowledgeBase).where(KnowledgeBase.id == kid)
+            )).scalar_one_or_none()
+            if knowledge:
+                items.append(SimpleNamespace(
+                    id=knowledge.id, title=knowledge.title, category=knowledge.category,
+                    content=knowledge.content, research_points=list(knowledge.research_points or []),
+                    tags=list(knowledge.tags or []),
+                ))
+        return items
+    finally:
+        # These analysis endpoints only read here. Plain snapshots also survive
+        # rollback expiry; no ORM state is reused after a model wait.
+        await db.rollback()
 
 
 def _knowledge_fallback(knowledge_list: list, query: str | None = None) -> str:
@@ -548,15 +570,7 @@ async def ai_analyze_research(
             status_code=422,
             detail=f"研究目标与约束最多 {MAX_RESEARCH_QUERY_CHARS} 字符，请精简后重试；不会静默截断要求。",
         )
-    # 获取所有相关知识条目
-    knowledge_list = []
-    for kid in request.knowledge_ids:
-        result = await db.execute(
-            select(KnowledgeBase).where(KnowledgeBase.id == kid)
-        )
-        knowledge = result.scalar_one_or_none()
-        if knowledge:
-            knowledge_list.append(knowledge)
+    knowledge_list = await _analysis_knowledge_snapshot(db, request.knowledge_ids)
 
     if not knowledge_list:
         raise HTTPException(status_code=404, detail="No valid knowledge entries found")
@@ -651,15 +665,7 @@ async def recommend_papers(
     """
     基于知识库推荐论文
     """
-    # 获取所有相关知识条目
-    knowledge_list = []
-    for kid in request.knowledge_ids:
-        result = await db.execute(
-            select(KnowledgeBase).where(KnowledgeBase.id == kid)
-        )
-        knowledge = result.scalar_one_or_none()
-        if knowledge:
-            knowledge_list.append(knowledge)
+    knowledge_list = await _analysis_knowledge_snapshot(db, request.knowledge_ids)
 
     if not knowledge_list:
         raise HTTPException(status_code=404, detail="No valid knowledge entries found")

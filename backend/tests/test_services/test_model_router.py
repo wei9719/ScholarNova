@@ -349,3 +349,70 @@ async def test_real_gateway_router_reports_transport_and_usage_independently(mon
     kwargs = client.chat.completions.create.await_args.kwargs
     assert kwargs["extra_body"] == {"enable_thinking": False}
     assert "_max_retries" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_query_planner_adapter_keeps_useful_budget_without_second_model(monkeypatch):
+    from app.services.search.query_planner import QueryPlanner
+    from app.schemas.query import DataSource
+
+    budgets = []
+
+    async def virtual_wait_for(request, timeout):
+        # A simulated 15-second provider fits the new budget, not the old 5.5s.
+        budgets.append(timeout)
+        assert timeout >= 15.0
+        return await request
+
+    class PlanningGateway(RoutedGateway):
+        async def chat(self, messages, **kwargs):
+            assert kwargs["_max_retries"] == 0
+            return '{"sub_queries":[{"source":"openalex","query":"RAG evaluation"}]}'
+
+    PlanningGateway.profiles = []
+    monkeypatch.setattr("app.services.inference.model_router.get_model_for_task", lambda task: {
+        "provider": "zhipu", "model": "offline-primary",
+    })
+    monkeypatch.setattr("app.services.inference.model_router.get_fallback_model_config", lambda: {
+        "enabled": True, "provider": "qwen", "model": "must-not-be-called",
+    })
+    monkeypatch.setattr("app.services.inference.model_router.asyncio.wait_for", virtual_wait_for)
+    gateway = RoutedLLMGateway("query_planning", gateway_factory=PlanningGateway)
+    planner = QueryPlanner(gateway)
+    result = await planner.plan("RAG", [DataSource.OPENALEX], planning_mode="ai")
+    assert budgets == [21.0, 20.0]
+    assert planner.planning_mode == "ai" and result.sub_queries[0].query == "RAG evaluation"
+    assert len(PlanningGateway.profiles) == 1
+    assert gateway.usage["total_tokens"] == 15 and gateway.usage["requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_query_planning_timeout_retains_attempt_without_inventing_zero_cost(monkeypatch):
+    from app.services.search.query_planner import QueryPlanner
+    from app.schemas.query import DataSource
+
+    class SlowPlanningGateway(RoutedGateway):
+        async def chat(self, messages, **kwargs):
+            assert kwargs["_max_retries"] == 0
+            self._usage = {
+                "request_attempts": 1, "requests": 0, "responses_received": 0,
+                "usage_reports": 0, "total_tokens": 0,
+            }
+            await asyncio.sleep(60)
+
+    SlowPlanningGateway.profiles = []
+    monkeypatch.setattr("app.services.inference.model_router.get_model_for_task", lambda task: {
+        "provider": "zhipu", "model": "offline-primary",
+    })
+    monkeypatch.setattr("app.services.inference.model_router.get_fallback_model_config", lambda: {
+        "enabled": True, "provider": "qwen", "model": "must-not-be-called",
+    })
+    gateway = RoutedLLMGateway("query_planning", gateway_factory=SlowPlanningGateway)
+    planner = QueryPlanner(gateway)
+    monkeypatch.setattr(planner, "AI_TIMEOUT_SECONDS", 0.01)
+    result = await planner.plan("RAG", [DataSource.OPENALEX], planning_mode="ai")
+    assert planner.planning_mode == "fallback" and "可能产生费用" in result.strategy
+    assert len(SlowPlanningGateway.profiles) == 1
+    assert gateway.usage["request_attempts"] == 1
+    assert gateway.usage["requests"] == gateway.usage["usage_reports"] == 0
+    assert gateway.last_result is None

@@ -7,6 +7,7 @@ import ModelConfig from '@/components/ModelConfig/ModelConfig'
 import NetworkConfig from '@/components/NetworkConfig'
 import ZoteroIntegration from '@/components/ZoteroIntegration'
 import OpenSourceInfo from '@/components/OpenSourceInfo'
+import { safeErrorMessage } from '@/utils/safeError'
 
 export default function Settings() {
   const { t } = useLocaleStore()
@@ -55,7 +56,7 @@ export default function Settings() {
         success: false,
         latency_ms: null,
         model_info: null,
-        error: err.response?.data?.detail || t('settings.connectionFailed'),
+        error: safeErrorMessage(err, t('settings.connectionFailed')),
       })
     } finally {
       setIsTesting(false)
@@ -69,7 +70,7 @@ export default function Settings() {
       await modelApi.saveConfig(config)
       toast.success(t('settings.connectionSuccess'))
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || t('settings.connectionFailed'))
+      toast.error(safeErrorMessage(err, t('settings.connectionFailed')))
     } finally {
       setIsSaving(false)
     }
@@ -87,7 +88,7 @@ export default function Settings() {
         success: false,
         latency_ms: null,
         model_info: null,
-        error: err.response?.data?.detail || t('settings.connectionFailed'),
+        error: safeErrorMessage(err, t('settings.connectionFailed')),
       })
     } finally {
       setIsEmbeddingTesting(false)
@@ -111,7 +112,7 @@ export default function Settings() {
         success: false,
         latency_ms: null,
         model_info: null,
-        error: err.response?.data?.detail || t('settings.connectionFailed'),
+        error: safeErrorMessage(err, t('settings.connectionFailed')),
       })
     } finally {
       setIsFallbackTesting(false)

@@ -78,7 +78,18 @@ async def run(args):
         SemanticScholarSource(api_key=settings.SEMANTIC_SCHOLAR_API_KEY, **common),
         ArxivSource(**common),
     ]
+    selected = getattr(args, "sources", None)
+    if selected:
+        sources = [source for source in sources if source.name in selected]
     report["sources"] = await asyncio.gather(*(probe(source) for source in sources))
+    if getattr(args, "skip_zotero", False):
+        report["zotero"] = {"status": "skipped_by_request", "writes_attempted": 0}
+        report["scope"] = "One read-only search per selected academic source; no Zotero or generative-model calls."
+        report["finished_at"] = datetime.now(UTC).isoformat()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(report, ensure_ascii=False))
+        return
     started = time.perf_counter()
     try:
         client = ZoteroLocalClient(timeout=4)
@@ -105,6 +116,8 @@ def main():
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--sources", nargs="+", choices=["crossref", "openalex", "semantic_scholar", "arxiv"])
+    parser.add_argument("--skip-zotero", action="store_true", help="Do not connect to the local reference manager")
     args = parser.parse_args()
     if not args.live:
         parser.error("No requests made. --live is required for network checks.")

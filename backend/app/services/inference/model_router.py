@@ -118,8 +118,8 @@ def _request_options(provider: str) -> dict[str, Any]:
 
 
 def _route_timeout(task: str) -> float | None:
-    # QueryPlanner owns a 12-second end-to-end planning budget. Bounding each
-    # route leaves time for the explicit fallback before its rule-based plan.
+    # Legacy callers retain their short route budget. QueryPlanner explicitly
+    # requests one 20-second route, with its deterministic plan as fallback.
     return {"query_planning": 5.5, "assistant": 25.0}.get(task)
 
 
@@ -161,7 +161,7 @@ async def chat_with_fallback(
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                **({"_max_retries": 0} if task == "assistant" else {}),
+                **({"_max_retries": 0} if task in {"assistant", "query_planning"} else {}),
                 **_request_options(str(profile.get("provider") or "")),
             )
             timeout = timeout_seconds if timeout_seconds is not None else _route_timeout(task)
@@ -245,6 +245,8 @@ class RoutedLLMGateway:
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        timeout_seconds: float | None = None,
+        allow_fallback: bool = True,
         **_: Any,
     ) -> str:
         try:
@@ -254,6 +256,8 @@ class RoutedLLMGateway:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 gateway_factory=self.gateway_factory,
+                timeout_seconds=timeout_seconds,
+                allow_fallback=allow_fallback,
             )
         except AllModelsUnavailableError as exc:
             self.last_result = None

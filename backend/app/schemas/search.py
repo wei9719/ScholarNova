@@ -27,6 +27,9 @@ class SearchRequest(BaseModel):
     """搜索请求"""
 
     query: str = Field(..., description="用户的自然语言查询", min_length=1, max_length=2000)
+    planning_mode: Literal["auto", "rules", "ai"] = Field(
+        "auto", description="规划方式：auto 短主题直检、复杂问题用 AI；rules 不调用规划模型；ai 显式 AI 规划",
+    )
     constraints: List[Constraint] = Field(
         default_factory=list,
         description="约束条件列表",

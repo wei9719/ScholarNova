@@ -298,6 +298,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 query=request.query,
                 sources=request.sources,
                 user_constraints=all_constraints or None,
+                planning_mode=request.planning_mode,
             )
             search_run.query_plan = query_plan.model_dump()
             planned_calls = [
@@ -629,9 +630,11 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 **usage,
                 "mode": (
                     "llm_query_planning"
-                    if usage["requests"]
+                    if planner.planning_mode == "ai"
                     else "rule_based_query_planning"
                 ),
+                "planning_mode": planner.planning_mode,
+                "planning_reason": planner.planning_reason,
             }
             result_summary = _build_result_summary(ranked_papers, query_plan)
             search_run.mark_as_completed()
@@ -734,7 +737,7 @@ async def create_search(
     """
     创建复杂查询搜索
 
-    接收用户的自然语言查询，使用 LLM 进行查询规划，然后并行检索多个学术数据源。
+    按所选模式生成规则或 AI 查询计划，然后并行检索多个学术数据源。
     """
     # 速率限制检查
     rate_limit_response = check_rate_limit(http_request, endpoint_type="search")
@@ -755,6 +758,7 @@ async def create_search(
         sources=[s.value for s in request.sources],
         max_results=request.max_results,
         filters={
+            "planning_mode": request.planning_mode,
             "date_from": request.date_from,
             "date_to": request.date_to,
             "min_citations": request.min_citations,

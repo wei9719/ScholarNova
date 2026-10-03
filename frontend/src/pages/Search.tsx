@@ -3,9 +3,10 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { Loader2, Search as SearchIcon, AlertCircle, BookOpen, Clock3, Database, ExternalLink } from 'lucide-react'
 import { searchApi, papersApi, networkApi } from '@/api/client'
-import type { AnalysisResult } from '@/api/types'
+import type { AnalysisResult, SearchPlanningMode } from '@/api/types'
 import { useSearchStore } from '@/stores/searchStore'
 import { useLocaleStore } from '@/stores/localeStore'
+import { safeErrorMessage } from '@/utils/safeError'
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/utils/searchHistory'
 import SearchBar from '@/components/SearchBar/SearchBar'
 import QueryPlan from '@/components/QueryPlan/QueryPlan'
@@ -38,6 +39,7 @@ export default function Search() {
   const selectedPaperIdRef = useRef<string | null>(selectedPaper?.id || null)
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [planningMode, setPlanningMode] = useState<SearchPlanningMode>('auto')
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = Number(window.localStorage.getItem('scholarnova-detail-width'))
     return Number.isFinite(saved) && saved >= 360 ? saved : 440
@@ -140,12 +142,12 @@ export default function Search() {
     setElapsedMs(0)
 
     try {
-      const response = await searchApi.create({ query: searchQuery })
+      const response = await searchApi.create({ query: searchQuery, planning_mode: planningMode })
       if (generation !== generationRef.current) return
       pollSearchStatus(response.data.run_id, generation)
     } catch (err: any) {
       if (generation !== generationRef.current) return
-      setError(err.response?.data?.detail || (t('common.error') + '. ' + t('common.retry')))
+      setError(safeErrorMessage(err, t('common.error') + '. ' + t('common.retry')))
       setIsLoading(false)
     }
   }
@@ -169,7 +171,7 @@ export default function Search() {
         else { setError('搜索超时'); setIsLoading(false) }
       } catch (err: any) {
         if (generation !== generationRef.current) return
-        setError(err.response?.data?.detail || '获取搜索状态失败')
+        setError(safeErrorMessage(err, '获取搜索状态失败'))
         setIsLoading(false)
       }
     }
@@ -237,8 +239,7 @@ export default function Search() {
       }
     } catch (requestError: any) {
       if (!isCurrentRequest()) return
-      const detail = requestError.response?.data?.detail
-      toast.error(typeof detail === 'string' ? detail : t('common.error') + '. ' + t('common.retry'))
+      toast.error(safeErrorMessage(requestError, t('common.error') + '. ' + t('common.retry')))
     } finally {
       if (isCurrentRequest()) {
         analysisRequestsRef.current.delete(paperId)
@@ -310,7 +311,7 @@ export default function Search() {
       <div className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-4 py-3">
         <div className="max-w-4xl mx-auto flex items-center gap-2">
           <div className="flex-1">
-            <SearchBar defaultValue={queryParam || query} size="sm" loading={isLoading} onSubmit={handleSearch} />
+            <SearchBar key={queryParam} defaultValue={queryParam || query} size="sm" loading={isLoading} onSubmit={handleSearch} />
           </div>
           <button type="button" onClick={handleLibrarySearch}
             className="hidden sm:inline-flex items-center gap-1.5 px-3 h-10 rounded-xl border border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-300 hover:border-primary-400 hover:text-primary-600 transition-colors"
@@ -318,6 +319,22 @@ export default function Search() {
             <ExternalLink className="w-3.5 h-3.5" />
             {locale === 'zh' ? '图书馆馆藏' : 'Library'}
           </button>
+        </div>
+        <div className="max-w-4xl mx-auto mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <label className="inline-flex items-center gap-2">
+            {locale === 'zh' ? '检索规划' : 'Search planning'}
+            <select value={planningMode} disabled={isLoading} onChange={(event) => { if (!isLoading) setPlanningMode(event.target.value as SearchPlanningMode) }}
+              className="rounded-lg border border-gray-200 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-900 disabled:opacity-50">
+              <option value="auto">{locale === 'zh' ? '自动规划' : 'Automatic planning'}</option>
+              <option value="rules">{locale === 'zh' ? '快速检索' : 'Fast search'}</option>
+              <option value="ai">{locale === 'zh' ? 'AI 规划' : 'AI planning'}</option>
+            </select>
+          </label>
+          <p>{planningMode === 'rules'
+            ? (locale === 'zh' ? '快速检索不调用规划模型；论文分析等任务仍按原设置使用 AI。' : 'Fast search skips the planning model; paper analysis and other tasks keep their configured AI models.')
+            : planningMode === 'ai'
+              ? (locale === 'zh' ? 'AI 规划单次最多等待约 20 秒，失败转快速检索；这不是整个搜索的总时限。' : 'Each AI planning attempt waits up to about 20s, then falls back to fast search. This is not the total search time limit.')
+              : (locale === 'zh' ? '短主题优先快速检索，复杂问题使用 AI 规划；不改变其它任务的模型配置。' : 'Short topics use fast search; complex questions use AI planning. Other task model settings are unchanged.')}</p>
         </div>
       </div>
 
@@ -366,9 +383,11 @@ export default function Search() {
                   </span>
                 </div>
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
-                  {locale === 'zh'
-                    ? '查询规划通常不超过 12 秒；各来源并行检索，慢源最长等待 45 秒。已完成的来源会立即显示。'
-                    : 'Planning usually takes under 12s. Sources run in parallel with a 45s per-source ceiling.'}
+                  {planningMode === 'rules'
+                    ? (locale === 'zh' ? '本次使用规则规划，不调用规划模型；数据源检索仍需等待网络响应。' : 'This search uses rule-based planning without a planning model call; sources still require network responses.')
+                    : (locale === 'zh'
+                      ? 'AI 规划单次最多等待约 20 秒；数据源检索另行计时，慢源最长等待 45 秒。规划预算不是搜索总时限。'
+                      : 'Each AI planning attempt waits up to about 20s; source requests have a separate 45s ceiling. The planning budget is not the total search time limit.')}
                 </p>
                 {sourceCalls.length > 0 && (
                   <div className="grid gap-1.5 sm:grid-cols-2">
@@ -427,8 +446,8 @@ export default function Search() {
                 </h3>
                 <p className="text-sm text-gray-400 dark:text-gray-500 max-w-sm mb-6">
                   {locale === 'zh'
-                    ? '输入研究问题或主题，AI 会规划优化的子查询并搜索多个学术数据库'
-                    : 'Enter a research question or topic above. The AI will plan optimized sub-queries and search across multiple academic databases.'}
+                    ? '输入研究问题或主题，根据所选模式规划检索式并搜索多个学术数据库'
+                    : 'Enter a research question or topic above. Your selected mode plans the query before searching multiple academic databases.'}
                 </p>
                 {searchHistory.length > 0 && (
                   <div className="w-full max-w-xl">

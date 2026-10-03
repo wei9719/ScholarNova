@@ -583,9 +583,18 @@ class LLMGateway:
         """
         import httpx
 
-        api_key = self._api_key or settings.SENSENOVA_API_KEY
-        base_url = (self._base_url or settings.SENSENOVA_API_BASE).rstrip("/")
-        model = self._model_name or settings.SENSENOVA_DEFAULT_MODEL
+        # Never borrow another provider's credentials for an explicit profile.
+        use_defaults = self.provider == "sensenova" and not self._explicit_profile
+        api_key = self._api_key or (settings.SENSENOVA_API_KEY if use_defaults else None)
+        base_url = self._base_url or (settings.SENSENOVA_API_BASE if use_defaults else None)
+        model = self._model_name or (settings.SENSENOVA_DEFAULT_MODEL if use_defaults else None)
+        if not api_key or not base_url or not model:
+            return {"status": "failed", "error": "图像模型配置不完整，请检查图像任务的模型、地址和凭据。"}
+        from app.core.ssrf import validate_base_url
+        valid, _ = await asyncio.to_thread(validate_base_url, base_url)
+        if not valid or urlparse(base_url).username or urlparse(base_url).password:
+            return {"status": "failed", "error": "图像模型地址未通过安全检查。"}
+        base_url = base_url.rstrip("/")
 
         # 将 aspect_ratio 转为像素尺寸
         size = self._resolve_image_size(image_size.upper(), aspect_ratio)
@@ -594,6 +603,7 @@ class LLMGateway:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept-Encoding": "identity",
         }
         payload = {
             "model": model,
@@ -606,39 +616,94 @@ class LLMGateway:
             payload["negative_prompt"] = negative_prompt
 
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                data = response.json()
+            async with asyncio.timeout(300), httpx.AsyncClient(timeout=300.0, follow_redirects=False) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as response:
+                    response.raise_for_status()
+                    if response.headers.get("content-encoding", "identity").lower() != "identity":
+                        raise ValueError("Compressed image response is not supported")
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(raw) + len(chunk) > 2 * 1024 * 1024:
+                            raise ValueError("Image response is too large")
+                        raw.extend(chunk)
+                    data = json.loads(raw)
         except httpx.HTTPStatusError as e:
             return {
                 "status": "failed",
-                "error": f"HTTP {e.response.status_code}: {e.response.text[:300]}",
+                "error": f"图像服务返回 HTTP {e.response.status_code}，请检查图像模型配置、额度和服务状态。",
             }
-        except httpx.HTTPError as e:
-            return {"status": "failed", "error": f"Network error: {str(e)}"}
-        except Exception as e:
-            return {"status": "failed", "error": f"Request error: {str(e)}"}
+        except httpx.HTTPError:
+            return {"status": "failed", "error": "图像服务连接失败或超时；未确认生成结果，重试可能再次计费。"}
+        except Exception:
+            return {"status": "failed", "error": "图像服务响应无法解析，未确认生成结果。"}
 
-        images_urls = [item.get("url") for item in data.get("data", []) if item.get("url")]
+        entries = data.get("data") if isinstance(data, dict) else None
+        images_urls = [item["url"] for item in entries if isinstance(item, dict)
+                       and isinstance(item.get("url"), str) and item["url"].strip()] if isinstance(entries, list) else []
         if not images_urls:
             return {
                 "status": "failed",
-                "error": f"No image in response: {json.dumps(data, ensure_ascii=False)[:300]}",
+                "error": "图像服务未返回可下载的图片地址。",
             }
 
         image_url = images_urls[-1]
+        # Provider output is not an instruction to fetch arbitrary local URLs.
+        import ipaddress
+        from app.core.ssrf import _resolve_hostname
+        try:
+            parsed_url = urlparse(image_url)
+            if parsed_url.scheme != "https" or not parsed_url.hostname or parsed_url.username or parsed_url.password:
+                raise ValueError("Unsafe image address")
+            addresses = await asyncio.to_thread(_resolve_hostname, parsed_url.hostname)
+            if not addresses or not all(ipaddress.ip_address(ip).is_global for ip in addresses):
+                raise ValueError("Non-public image address")
+        except Exception:
+            return {"status": "failed", "error": "图像下载地址未通过安全检查。"}
 
-        # 可选：下载到本地
+        # Capability checks also download and decode; a URL alone is not a
+        # generated image. Saving the validated bytes is optional.
+        import os
+        import tempfile
+
+        temporary_path = None
+        try:
+            async with asyncio.timeout(120), httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+                async with client.stream("GET", image_url, headers={"Accept-Encoding": "identity"}) as img_resp:
+                    img_resp.raise_for_status()
+                    # Check before iterating: HTTP decompression otherwise occurs
+                    # before the byte limit. PNG already provides compression.
+                    if img_resp.headers.get("content-encoding", "identity").lower() != "identity":
+                        raise ValueError("Compressed image download is not supported")
+                    limit = 20 * 1024 * 1024
+                    if int(img_resp.headers.get("content-length") or 0) > limit:
+                        raise ValueError("Image too large")
+                    content = bytearray()
+                    async for chunk in img_resp.aiter_bytes():
+                        if len(content) + len(chunk) > limit:
+                            raise ValueError("Image too large")
+                        content.extend(chunk)
+            # The requested output is PNG. HTML error pages must not replace
+            # a previous figure and then be reported as successful images.
+            if not content.startswith(b"\x89PNG\r\n\x1a\n") or not content.endswith(b"\x00\x00\x00\x00IEND\xaeB`\x82"):
+                raise ValueError("Not a complete PNG response")
+            from app.services.pdf.parser import run_pdf_work
+            await run_pdf_work(self._validate_generated_png, bytes(content))
+            if save_path:
+                directory = os.path.dirname(save_path) or "."
+                os.makedirs(directory, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=directory, suffix=".part", delete=False) as output:
+                    temporary_path = output.name
+                    output.write(content)
+                os.replace(temporary_path, save_path)
+        except Exception:
+            return {"status": "failed", "error": "图片下载、校验或保存未完成（需完整 PNG，最大 20 MB）。已有图片未覆盖；服务商可能已计费，请勿连续重试。"}
+        finally:
+            if temporary_path and os.path.exists(temporary_path):
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    logger.warning("Could not remove temporary generated image")
         if save_path:
-            import os
-
-            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                img_resp = await client.get(image_url)
-                img_resp.raise_for_status()
-                with open(save_path, "wb") as f:
-                    f.write(img_resp.content)
             return {
                 "status": "ok",
                 "output": save_path,
@@ -647,6 +712,19 @@ class LLMGateway:
             }
 
         return {"status": "ok", "url": image_url, "message": "Image generated successfully"}
+
+    @staticmethod
+    def _validate_generated_png(content: bytes) -> None:
+        """Decode on the existing bounded native worker, after a pixel-size gate."""
+        import struct
+        import pymupdf
+
+        width, height = struct.unpack(">II", content[16:24])
+        if not width or not height or width > 8192 or height > 8192 or width * height > 20_000_000:
+            raise ValueError("Unsupported image dimensions")
+        pixmap = pymupdf.Pixmap(content)
+        if (pixmap.width, pixmap.height) != (width, height):
+            raise ValueError("Invalid PNG dimensions")
 
     @staticmethod
     def _resolve_image_size(resolution: str, aspect_ratio: str) -> str:

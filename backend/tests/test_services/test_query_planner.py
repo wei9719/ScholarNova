@@ -2,9 +2,13 @@
 查询规划器测试
 """
 
+import asyncio
+import json
+from unittest.mock import AsyncMock
+
 import pytest
 
-from app.schemas.query import DataSource
+from app.schemas.query import Constraint, DataSource
 from app.services.search.query_planner import QueryPlanner
 
 
@@ -249,3 +253,131 @@ class TestQueryPlanner:
         )
 
         assert result.intent == "exact_lookup"
+
+
+def _model_plan(source="openalex", query="federated learning privacy"):
+    return json.dumps({
+        "sub_queries": [{"source": source, "query": query, "rationale": "Semantic decomposition"}],
+        "keywords": ["federated learning", "privacy"], "strategy": "Focused comparison",
+        "intent": "methodology_survey",
+    })
+
+
+@pytest.mark.parametrize("query", [
+    "transformer attention mechanism", "deep learning for NLP", "RAG",
+    "大语言模型在食品制作方面的应用", "食品保鲜", "2020-2024 ACL Transformer",
+    "the AlphaGeometry paper", "doi:10.1038/s41586-023-06747-5",
+])
+async def test_auto_short_topics_do_not_attempt_model(query):
+    gateway = AsyncMock()
+    planner = QueryPlanner(gateway)
+    result = await planner.plan(query, [DataSource.OPENALEX])
+    gateway.chat.assert_not_awaited()
+    assert planner.planning_mode == "rules"
+    assert "规则直检" in result.strategy
+    assert result.sub_queries and result.original_query == query
+
+
+async def test_rules_mode_keeps_constraints_without_model_even_for_complex_request():
+    gateway = AsyncMock()
+    planner = QueryPlanner(gateway)
+    explicit = Constraint(key="min_citations", operator="gte", value=10)
+    result = await planner.plan(
+        "比较 2020-2024 ACL 或 EMNLP 的 Transformer 方法，并排除未开放获取的论文",
+        [DataSource.OPENALEX], [explicit], planning_mode="rules",
+    )
+    gateway.chat.assert_not_awaited()
+    assert explicit in result.constraints
+    assert {(c.operator, c.value) for c in result.constraints if c.key == "year"} == {("gte", 2020), ("lte", 2024)}
+    assert "不调用规划模型" in result.strategy
+
+
+@pytest.mark.parametrize("query,mode", [
+    ("RAG", "ai"),
+    ("比较联邦学习与集中学习，排除没有隐私评估的研究", "auto"),
+    ("How do graph neural networks compare with transformers for traffic prediction?", "auto"),
+])
+async def test_semantic_planning_is_single_budgeted_attempt(query, mode):
+    gateway = AsyncMock()
+    gateway.chat.return_value = _model_plan()
+    planner = QueryPlanner(gateway)
+    result = await planner.plan(query, [DataSource.OPENALEX], planning_mode=mode)
+    gateway.chat.assert_awaited_once()
+    assert gateway.chat.call_args.kwargs["timeout_seconds"] == 20.0
+    assert gateway.chat.call_args.kwargs["allow_fallback"] is False
+    assert planner.planning_mode == "ai" and "AI 规划完成" in result.strategy
+
+
+@pytest.mark.parametrize("response", [
+    "", "{}", "not json", "[]",
+    _model_plan(query="   "), _model_plan(query="a" * 2001), _model_plan(source="unselected-source"),
+])
+async def test_invalid_ai_plan_uses_rules_without_claiming_ai_success(response):
+    gateway = AsyncMock()
+    gateway.chat.return_value = response
+    planner = QueryPlanner(gateway)
+    result = await planner.plan("federated learning", [DataSource.OPENALEX], planning_mode="ai")
+    assert planner.planning_mode == "fallback"
+    assert "已使用规则检索" in result.strategy and "可能产生费用" in result.strategy
+    assert result.sub_queries[0].query
+    gateway.chat.assert_awaited_once()
+
+
+async def test_planning_timeout_cancels_attempt_and_reuses_existing_rule_plan(monkeypatch):
+    cancelled = asyncio.Event()
+
+    async def slow_model(**kwargs):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+
+    gateway = AsyncMock()
+    gateway.chat.side_effect = slow_model
+    planner = QueryPlanner(gateway)
+    monkeypatch.setattr(planner, "PLAN_TIMEOUT_SECONDS", 0.01)
+    result = await planner.plan("federated learning", [DataSource.OPENALEX], planning_mode="ai")
+    assert cancelled.is_set()
+    assert planner.planning_mode == "fallback" and result.sub_queries
+    gateway.chat.assert_awaited_once()
+
+
+async def test_cancelling_search_does_not_start_fallback_plan():
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def pending_model(**kwargs):
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+
+    gateway = AsyncMock()
+    gateway.chat.side_effect = pending_model
+    planner = QueryPlanner(gateway)
+    task = asyncio.create_task(planner.plan("RAG", [DataSource.OPENALEX], planning_mode="ai"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled.is_set() and planner.planning_mode != "fallback"
+    gateway.chat.assert_awaited_once()
+
+
+async def test_ai_source_queries_are_nonempty_selected_and_bounded_per_source():
+    gateway = AsyncMock()
+    gateway.chat.return_value = json.dumps({"sub_queries": [
+        {"source": "openalex", "query": "privacy preserving learning"},
+        {"source": "openalex", "query": "duplicate call not needed"},
+        {"source": "crossref", "query": " "},
+        {"source": "arxiv", "query": "not selected"},
+    ]})
+    explicit = Constraint(key="year", operator="gte", value=2020)
+    result = await QueryPlanner(gateway).plan(
+        "federated learning", [DataSource.OPENALEX, DataSource.CROSSREF], [explicit], planning_mode="ai",
+    )
+    assert len(result.sub_queries) == 2
+    assert {item.source for item in result.sub_queries} == {DataSource.OPENALEX, DataSource.CROSSREF}
+    assert all(item.query.strip() for item in result.sub_queries)
+    assert explicit in result.constraints

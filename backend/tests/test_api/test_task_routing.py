@@ -25,6 +25,7 @@ class _ScalarResult:
 class _KnowledgeDB:
     def __init__(self, item):
         self.item = item
+        self.rollback = AsyncMock()
 
     async def execute(self, _query):
         return _ScalarResult(self.item)
@@ -75,7 +76,7 @@ async def test_paper_text_analysis_uses_routed_usage(monkeypatch):
         "paper-1",
         AnalysisRequest(query="What is supported?"),
         object(),
-        SimpleNamespace(commit=AsyncMock()),
+        SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock()),
     )
 
     assert result.model_completed is True
@@ -135,7 +136,7 @@ async def test_visual_paper_analysis_stays_on_vision_task(monkeypatch):
         "paper-visual",
         AnalysisRequest(query="Read the figure"),
         object(),
-        SimpleNamespace(commit=AsyncMock()),
+        SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock()),
     )
 
     assert result.model_completed is True

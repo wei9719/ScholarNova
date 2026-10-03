@@ -59,6 +59,21 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('local text provider routing', () => {
+  it('renders task-probe validation errors as text and allows retry', async () => {
+    mocks.probe.mockRejectedValueOnce({ response: { status: 422, data: { detail: [
+      { msg: '任务模型配置不完整', input: 'PRIVATE_KEY' },
+    ] } } })
+    renderConfig()
+    await openTask('查询规划')
+    fireEvent.click(screen.getByRole('button', { name: '真实测试此任务' }))
+    expect(await screen.findByText('任务模型配置不完整')).toBeInTheDocument()
+    expect(screen.queryByText(/PRIVATE_KEY/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '真实测试此任务' })).toBeEnabled()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '真实测试此任务' })) })
+    expect(mocks.probe).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText('任务模型配置不完整')).not.toBeInTheDocument()
+  })
+
   it('offers local only for the assistant while preserving every existing default provider', async () => {
     renderConfig()
     const globalProvider = screen.getByRole('combobox', { name: 'settings.provider' })

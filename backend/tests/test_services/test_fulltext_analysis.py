@@ -1,5 +1,6 @@
 from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from starlette.datastructures import UploadFile
@@ -7,6 +8,7 @@ from starlette.datastructures import UploadFile
 from app.api.v1 import analysis as analysis_api
 from app.api.v1.analysis import _document_text, _visual_pages
 from app.config import settings
+from app.schemas.query import AnalysisRequest
 from app.services.pdf.parser import PDFParser
 
 
@@ -127,7 +129,7 @@ async def test_uploaded_pdf_is_persisted_and_used_as_fulltext(tmp_path, monkeypa
     assert len(text) > 500
     assert visuals == []
     assert coverage == "fulltext:uploaded"
-    assert error is None
+    assert "章节的摘录" in error  # Source acquired; the selected context is not the whole paper.
 
 
 @pytest.mark.asyncio
@@ -145,3 +147,92 @@ async def test_invalid_upload_is_rejected(tmp_path, monkeypatch, db_session):
             db=db_session,
         )
     assert getattr(exc_info.value, "status_code", None) == 400
+
+
+@pytest.mark.parametrize("mode", ["body", "sections", "captions", "tables", "large_table"])
+def test_document_context_discloses_selection_and_bounds_all_text(mode):
+    document = SimpleNamespace(sections=[], full_text="Provided evidence", figures=[], tables=[])
+    if mode == "body":
+        document.full_text = "x" * 48000 + "HIDDEN_BODY_TAIL"
+    elif mode == "sections":
+        document.sections = [SimpleNamespace(heading="Methods", text="Selected methods")]
+        document.full_text = "Unrecognized preface not included in the selected section"
+    elif mode == "captions":
+        document.figures = [{"caption": f"Figure {i}"} for i in range(20)] + [{"caption": "HIDDEN_CAPTION"}]
+    elif mode == "tables":
+        document.tables = [{"rows": [["Visible"]] * 12 + [["HIDDEN_ROW"]]}] * 9
+    else:
+        document.tables = [{"rows": [["x" * 49000 + "HIDDEN_CELL_TAIL"]]}]
+
+    text, note = analysis_api._document_context(document)
+
+    assert note and text.startswith(f"[材料覆盖说明：{note}]")
+    assert "HIDDEN" not in text
+    assert len(text.split("\n\n", 1)[1]) <= 48000
+    if mode == "sections":
+        assert "不等于完整论文" in note and "Selected methods" in text
+    elif mode == "captions":
+        assert "20/21" in note
+    elif mode == "tables":
+        assert "8/9" in note and "12 行" in note
+    else:
+        assert "48000" in note
+
+
+def test_short_plain_document_is_not_falsely_marked_truncated():
+    text, note = analysis_api._document_context(SimpleNamespace(
+        sections=[], full_text="Complete extracted short text", figures=[], tables=[],
+    ))
+    assert text == "Complete extracted short text"
+    assert note == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vision", ["none", "accepted", "rejected"])
+async def test_visible_coverage_is_not_left_to_model_claims(monkeypatch, vision):
+    info = {"title": "Test", "authors": "Test", "year": 2026, "venue": "Test", "abstract": "Abstract"}
+    note = "正文超过 48000 字符，本次仅提供前 48000 字符，不是完整论文"
+    monkeypatch.setattr(analysis_api, "check_rate_limit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(analysis_api, "_find_paper_info", AsyncMock(return_value=info))
+    visuals = [] if vision == "none" else ["data:image/jpeg;base64,AA=="]
+    monkeypatch.setattr(analysis_api, "_load_document_context", AsyncMock(return_value=(
+        "Bounded original text", visuals, "fulltext:uploaded", note,
+    )))
+    captured = []
+
+    async def text_model(**kwargs):
+        captured.append(kwargs["messages"][-1]["content"])
+        return SimpleNamespace(content="Model answer without its required disclaimer.",
+                               usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+
+    class VisionGateway:
+        def __init__(self, **_kwargs):
+            self.last_usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            self.usage = {}
+
+        def configure(self, **kwargs):
+            pass
+
+        async def chat(self, **kwargs):
+            captured.append(kwargs["messages"][-1]["content"][0]["text"])
+            if vision == "rejected":
+                raise RuntimeError("Synthetic vision rejection")
+            return "Model answer without its required disclaimer."
+
+    monkeypatch.setattr(analysis_api, "chat_with_fallback", text_model)
+    monkeypatch.setattr("app.services.llm.gateway.LLMGateway", VisionGateway)
+    monkeypatch.setattr("app.config.get_model_for_task", lambda _: {
+        "provider": "fake", "model": "fake", "api_key": "", "base_url": "",
+    })
+    result = await analysis_api.analyze_paper("test", AnalysisRequest(query="Summarize"), None,
+                                            SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock()))
+    assert all(note in prompt and "必须写“全文节选”" in prompt for prompt in captured)
+    assert result.document_coverage == "fulltext"  # Compatibility: source availability, not full reading.
+    assert result.document_error == note
+    assert result.summary.startswith("> 材料覆盖：PDF 提取文字；" + note)
+    count = 1 if vision == "accepted" else 0
+    assert result.visual_pages_read == count
+    assert f"完成本次分析的模型收到 {count} 个图表页面，不代表覆盖所有图表" in result.summary
+    if vision == "rejected":
+        assert "本次仅依据正文" in captured[-1]
+        assert "另附 1 个" not in captured[-1]

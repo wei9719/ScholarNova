@@ -12,7 +12,8 @@ LLM 驱动的复杂查询解析，将自然语言查询分解为:
 import asyncio
 import json
 import logging
-from typing import Dict, List, Optional
+import re
+from typing import Dict, List, Literal, Optional
 
 from app.schemas.query import (
     Constraint,
@@ -29,7 +30,7 @@ class QueryPlanner:
     """
     查询规划器
 
-    使用 LLM 将用户的自然语言查询解析为结构化的 QueryParseResult。
+    短主题直接生成规则计划，复杂查询或显式 AI 模式才使用 LLM。
     当 LLM 不可用时，回退到基于规则的默认实现。
     """
 
@@ -40,6 +41,8 @@ class QueryPlanner:
         "ms2": "MS2: Multi-Document Summarization of Medical Studies",
         "squad": "SQuAD: 100,000+ Questions for Machine Comprehension of Text",
     }
+    AI_TIMEOUT_SECONDS = 20.0
+    PLAN_TIMEOUT_SECONDS = 21.0
 
     def __init__(self, llm_gateway=None):
         """
@@ -49,12 +52,15 @@ class QueryPlanner:
             llm_gateway: LLM 网关实例（可选，为 None 时使用规则回退）
         """
         self.llm_gateway = llm_gateway
+        self.planning_mode = "rules"
+        self.planning_reason = "尚未规划"
 
     async def plan(
         self,
         query: str,
         sources: List[DataSource],
         user_constraints: Optional[List[Constraint]] = None,
+        planning_mode: Literal["auto", "rules", "ai"] = "auto",
     ) -> QueryParseResult:
         """
         解析查询并生成检索计划
@@ -63,11 +69,16 @@ class QueryPlanner:
             query: 用户的自然语言查询
             sources: 要检索的数据源列表
             user_constraints: 用户显式指定的约束条件（可选）
+            planning_mode: 自动判断、仅规则或显式 AI 规划
 
         Returns:
             QueryParseResult 结构化解析结果
         """
+        if planning_mode not in {"auto", "rules", "ai"}:
+            raise ValueError("Invalid query planning mode")
+        self.planning_mode = "rules"
         if not sources:
+            self.planning_reason = "未选择数据源，不调用规划模型"
             return QueryParseResult(
                 original_query=query,
                 sub_queries=[],
@@ -79,16 +90,50 @@ class QueryPlanner:
 
         rule_plan = self._plan_with_rules(query, sources, user_constraints)
 
-        # 精确标题/论文别名查询由确定性规则处理更快、更稳定。复杂探索型查询
-        # 使用 LLM 做语义分解；供应商异常时保持原有规则路径可用。
-        if self.llm_gateway is None or rule_plan.intent == "exact_lookup":
-            return rule_plan
+        if planning_mode == "rules":
+            self.planning_reason = "快速检索：不调用规划模型"
+        elif planning_mode == "auto" and rule_plan.intent == "exact_lookup":
+            self.planning_reason = "自动规划：精确论文查询使用规则直检"
+        elif planning_mode == "auto" and not self._needs_semantic_planning(query):
+            self.planning_reason = "自动规划：短主题关键词使用规则直检"
+        elif self.llm_gateway is None:
+            self.planning_reason = "规划模型不可用，使用规则检索"
+        else:
+            self.planning_reason = "AI 语义规划：单次模型请求预算 20 秒，失败后使用规则检索"
+            return await self._try_ai_plan(query, sources, user_constraints, rule_plan)
+        rule_plan.strategy = f"{self.planning_reason}。{rule_plan.strategy}"
+        return rule_plan
+
+    @staticmethod
+    def _needs_semantic_planning(query: str) -> bool:
+        """A bounded, explainable heuristic, not a semantic quality classifier.
+
+        Explicit comparisons/exclusions/questions and long descriptions benefit
+        from decomposition. Dates, venues and short topic phrases alone do not.
+        Users can always override this decision with the AI or rules mode.
+        """
+        semantic_signals = (
+            r"[?？]|比较|对比|区别|排除|不包括|不包含|分别|同时|如何|为什么|哪些|"
+            r"\b(?:compare|comparison|versus|exclude|excluding|without|how|why|which)\b|"
+            r"\b(?:rather than|but not|similar to)\b"
+        )
+        return bool(
+            re.search(semantic_signals, query, re.IGNORECASE)
+            or len(re.findall(r"[\u4e00-\u9fff]", query)) > 24
+            or len(re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", query)) > 10
+            or len(query.strip()) > 180
+        )
+
+    async def _try_ai_plan(
+        self, query: str, sources: List[DataSource],
+        user_constraints: Optional[List[Constraint]], rule_plan: QueryParseResult,
+    ) -> QueryParseResult:
         try:
-            # 查询规划不能无限占住整个检索。超时后立即使用已经生成好的
-            # 确定性计划，兼顾比赛成本、端到端延迟与服务可用性。
+            # One useful model attempt, not two routes that both expire before
+            # a slower provider can respond. Source retrieval has its own budget.
             llm_plan = await asyncio.wait_for(
                 self._plan_with_llm(query, sources, user_constraints),
-                timeout=12.0,
+                timeout=self.PLAN_TIMEOUT_SECONDS,
             )
             # 保留规则解析出的显式约束，避免 LLM 遗漏年份、venue 等硬条件。
             existing = {
@@ -103,8 +148,16 @@ class QueryPlanner:
                 )
                 if signature not in existing:
                     llm_plan.constraints.append(constraint)
+            self.planning_mode = "ai"
+            self.planning_reason = "AI 规划完成"
+            llm_plan.strategy = f"{self.planning_reason}。{llm_plan.strategy}"
             return llm_plan
         except Exception as exc:
+            # CancelledError propagates: cancelling search must not start a
+            # replacement search plan. Failed calls may still have provider cost.
+            self.planning_mode = "fallback"
+            self.planning_reason = "AI 规划超时、不可用或返回无效计划，已使用规则检索；已尝试的模型请求可能产生费用"
+            rule_plan.strategy = f"{self.planning_reason}。{rule_plan.strategy}"
             logger.warning(
                 "LLM query planning failed; using deterministic plan: %s",
                 type(exc).__name__,
@@ -152,6 +205,8 @@ class QueryPlanner:
             ],
             temperature=0.2,
             max_tokens=1024,
+            timeout_seconds=self.AI_TIMEOUT_SECONDS,
+            allow_fallback=False,
         )
 
         # 清理可能的 markdown 代码块包裹
@@ -177,19 +232,24 @@ class QueryPlanner:
         # 构建 sub_queries
         sub_queries = []
         source_set = {s.value for s in sources}
+        covered_sources = set()
         for sq_data in data.get("sub_queries", []):
             source_val = sq_data.get("source", "")
-            if source_val in source_set:
+            source_query = sq_data.get("query")
+            if (source_val in source_set and source_val not in covered_sources
+                    and isinstance(source_query, str) and 0 < len(source_query.strip()) <= 2000):
                 sub_queries.append(SubQuery(
-                    query=sq_data.get("query", query),
+                    query=source_query.strip(),
                     source=DataSource(source_val),
                     rationale=sq_data.get("rationale", ""),
                 ))
+                covered_sources.add(source_val)
+        if not sub_queries:
+            raise ValueError("AI query plan contains no usable source query")
 
         # 为 LLM 未覆盖的数据源补充子查询
-        covered_sources = {sq.source for sq in sub_queries}
         for source in sources:
-            if source not in covered_sources:
+            if source.value not in covered_sources:
                 sub_queries.append(SubQuery(
                     query=query,
                     source=source,

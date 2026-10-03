@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Dict
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,21 +34,63 @@ async def _resolve_route_context(route_id: str, db: AsyncSession) -> Dict[str, A
 
     from app.models.knowledge import KnowledgeBase, ResearchRoute
 
-    route = (await db.execute(select(ResearchRoute).where(ResearchRoute.id == route_id))).scalar_one_or_none()
-    if not route:
-        return {"route": None, "knowledge_list": [], "knowledge_text": ""}
-
-    knowledge_list = []
-    if route.knowledge_ids:
-        for kid in route.knowledge_ids:
+    try:
+        saved = (await db.execute(select(ResearchRoute).where(ResearchRoute.id == route_id))).scalar_one_or_none()
+        if not saved:
+            return {"route": None, "knowledge_list": [], "knowledge_text": ""}
+        route = SimpleNamespace(
+            id=saved.id, title=saved.title, description=saved.description,
+            knowledge_ids=list(saved.knowledge_ids) if saved.knowledge_ids is not None else None,
+            ai_analysis=saved.ai_analysis, status=saved.status,
+        )
+        knowledge_list = []
+        for kid in route.knowledge_ids or []:
             k = (await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kid))).scalar_one_or_none()
             if k:
-                knowledge_list.append(k)
+                knowledge_list.append(SimpleNamespace(
+                    title=k.title, category=k.category, content=k.content,
+                    research_points=list(k.research_points or []),
+                ))
+        knowledge_text = "\n".join(
+            [f"{i}. {k.title} [{k.category}] - {(k.content or '')[:200]}" for i, k in enumerate(knowledge_list, 1)]
+        )
+        return {"route": route, "knowledge_list": knowledge_list, "knowledge_text": knowledge_text}
+    finally:
+        # Remote calls use plain snapshots, never a checked-out DB connection.
+        await db.rollback()
 
-    knowledge_text = "\n".join(
-        [f"{i}. {k.title} [{k.category}] - {(k.content or '')[:200]}" for i, k in enumerate(knowledge_list, 1)]
-    )
-    return {"route": route, "knowledge_list": knowledge_list, "knowledge_text": knowledge_text}
+
+async def _save_route_result(route, combined: str, db: AsyncSession) -> dict | None:
+    """Publish only if the route is still the version this run analyzed."""
+    from sqlalchemy import JSON, or_, update
+
+    from app.models.knowledge import ResearchRoute
+    from app.schemas.knowledge import RouteResponse
+
+    try:
+        result = await db.execute(update(ResearchRoute).where(
+            ResearchRoute.id == route.id,
+            ResearchRoute.title == route.title,
+            ResearchRoute.description == route.description,
+            (ResearchRoute.knowledge_ids == route.knowledge_ids if route.knowledge_ids is not None
+             else or_(ResearchRoute.knowledge_ids.is_(None), ResearchRoute.knowledge_ids == JSON.NULL)),
+            ResearchRoute.status == route.status,
+            ResearchRoute.ai_analysis == route.ai_analysis,
+        ).values(ai_analysis=combined).returning(ResearchRoute))
+        saved = result.scalar_one_or_none()
+        if saved is None:
+            await db.rollback()
+            return None
+        payload = RouteResponse(
+            id=saved.id, title=saved.title, description=saved.description,
+            knowledge_ids=saved.knowledge_ids or [], ai_analysis=saved.ai_analysis,
+            status=saved.status, created_at=saved.created_at, updated_at=saved.updated_at,
+        ).model_dump()
+        await db.commit()
+        return payload
+    except BaseException:
+        await db.rollback()
+        raise
 
 
 def _modules_to_arch_text(modules):
@@ -84,7 +128,6 @@ async def stream_route_analysis(
     每步完成后 yield 一个事件；最后 yield "done"（含 RouteResponse 字段）或 "error"。
     """
     from app.config import get_model_for_task, runtime_path
-    from app.schemas.knowledge import RouteResponse
     from app.services.diagram.route_planner import build_roadmap_for_route
     from app.services.inference import AllModelsUnavailableError, RoutedLLMGateway, chat_with_fallback
     from app.services.llm.gateway import LLMGateway
@@ -97,6 +140,9 @@ async def stream_route_analysis(
 
     knowledge_list = ctx["knowledge_list"]
     knowledge_text = ctx["knowledge_text"]
+    # Every run owns immutable image URLs: another tab must not replace bytes
+    # referenced by an already saved analysis or browser cache.
+    image_stem = uuid4().hex
     description = (getattr(route, "description", "") or "").strip()
     draft_excerpt = description[:12000]
     if len(description) > 12000:
@@ -185,11 +231,11 @@ async def stream_route_analysis(
         arch_text = _modules_to_arch_text(_modules)
         diagram_dir = runtime_path("generated") / "route_diagrams"
         diagram_dir.mkdir(parents=True, exist_ok=True)
-        diagram_path = diagram_dir / f"{route.id}.png"
+        diagram_path = diagram_dir / f"{image_stem}.png"
         image_result = await sn.generate_image(prompt=image_prompt, save_path=str(diagram_path))
         if image_result.get("status") == "ok":
             image_url = (
-                f"/generated/route_diagrams/{route.id}.png"
+                f"/generated/route_diagrams/{diagram_path.name}"
                 if diagram_path.exists()
                 else image_result.get("url", "")
             )
@@ -237,11 +283,11 @@ async def stream_route_analysis(
                 "\n\n> 🛡️ **时效性与幻觉防线**：" + evidence_summary
             )
         roadmap_result = {"md": roadmap_md, "url": ""}
-        roadmap_path = diagram_dir / f"{route.id}_roadmap.png"
+        roadmap_path = diagram_dir / f"{image_stem}_roadmap.png"
         roadmap_img = await sn.generate_image(prompt=roadmap_prompt, save_path=str(roadmap_path))
         if roadmap_img.get("status") == "ok":
             roadmap_result["url"] = (
-                f"/generated/route_diagrams/{route.id}_roadmap.png"
+                f"/generated/route_diagrams/{roadmap_path.name}"
                 if roadmap_path.exists()
                 else roadmap_img.get("url", "")
             )
@@ -322,27 +368,17 @@ async def stream_route_analysis(
         "（仅架构与阶段规划，不含文字分析、架构评判及图像生成）。"
     )
     try:
-        route.ai_analysis = combined
-        await db.commit()
-        await db.refresh(route)
-        data = {
-            "id": route.id,
-            "title": route.title,
-            "description": route.description,
-            "knowledge_ids": route.knowledge_ids or [],
-            "ai_analysis": route.ai_analysis,
-            "status": route.status,
-            "created_at": route.created_at,
-            "updated_at": route.updated_at,
-        }
-        # 显式转成 schema 以触发序列化校验
-        payload = RouteResponse(**data).model_dump()
+        payload = await _save_route_result(route, combined, db)
+        if payload is None:
+            yield {"event": "error", "progress": 100,
+                   "message": "路线在生成期间已修改或删除，本次结果未保存；请刷新路线后重新生成。"}
+            return
         payload["planning"] = {
             "architecture": architecture_plan_source,
             "roadmap": roadmap_plan_source,
             "usage": planning_usage,
         }
         yield {"event": "done", "progress": 100, "message": "分析完成", "data": payload}
-    except Exception as e:
+    except Exception:
         logger.exception("Save route analysis failed", extra={"route_id": route_id})
-        yield {"event": "error", "progress": 100, "message": f"Saving route analysis failed: {e}"}
+        yield {"event": "error", "progress": 100, "message": "路线分析保存失败，请刷新路线确认保存状态后重试。"}

@@ -144,19 +144,23 @@ def _arxiv_id(paper_info: dict) -> Optional[str]:
     return None
 
 
-def _document_text(parsed) -> str:
-    """Build a section-aware context that covers the paper within a safe budget."""
+def _document_context(parsed) -> tuple[str, str]:
+    """Bound supplied text and disclose selection/truncation separately."""
     budget = 48_000
     parts: list[str] = []
+    notes: list[str] = []
     priority = (
         "abstract", "introduction", "method", "approach", "experiment",
         "result", "discussion", "limitation", "conclusion",
     )
     sections = list(parsed.sections or [])
+    if sections:
+        notes.append("正文使用已识别章节的摘录，未识别章节的文字可能未纳入，不等于完整论文")
     sections.sort(key=lambda item: next(
         (index for index, key in enumerate(priority) if key in item.heading.casefold()),
         len(priority),
     ))
+    used = 0
     for section in sections:
         page_start = getattr(section, "page_start", None)
         page_end = getattr(section, "page_end", None)
@@ -168,18 +172,26 @@ def _document_text(parsed) -> str:
                 else f" (page {page_start})"
             )
         value = f"\n### {section.heading}{page_label}\n{section.text.strip()}"
-        remaining = budget - sum(len(item) for item in parts)
+        remaining = budget - used
         if remaining <= 0:
+            notes.append("章节文字超过 48000 字符，本次只提供预算内节选")
             break
+        if len(value) > remaining:
+            notes.append("章节文字超过 48000 字符，本次只提供预算内节选")
         parts.append(value[:remaining])
+        used += len(parts[-1])
     if not parts:
         parts.append((parsed.full_text or "")[:budget])
+        if len(parsed.full_text or "") > budget:
+            notes.append("正文超过 48000 字符，本次仅提供前 48000 字符，不是完整论文")
 
     if parsed.figures:
         captions = "\n".join(
             f"- {item.get('caption', '')}" for item in parsed.figures[:20]
         )
         parts.append(f"\n### Figure captions\n{captions}")
+        if len(parsed.figures) > 20:
+            notes.append(f"图注仅选取前 20/{len(parsed.figures)} 个")
     if parsed.tables:
         tables: list[str] = []
         for item in parsed.tables[:8]:
@@ -189,7 +201,21 @@ def _document_text(parsed) -> str:
                 + "\n".join(" | ".join(row) for row in rows)
             )
         parts.append("\n### Extracted tables\n" + "\n\n".join(tables))
-    return "\n".join(parts)
+        if len(parsed.tables) > 8 or any(len(item.get("rows", [])) > 12 for item in parsed.tables[:8]):
+            notes.append(f"表格文字最多选取前 8/{len(parsed.tables)} 张、每张前 12 行，未覆盖全部表格内容")
+    combined = "\n".join(parts)
+    if len(combined) > budget:
+        notes.append("正文与图表文字合计超过 48000 字符，超出部分未发送模型")
+    note = "；".join(dict.fromkeys(notes))
+    text = combined[:budget]
+    if note:
+        text = f"[材料覆盖说明：{note}]\n\n{text}"
+    return text, note
+
+
+def _document_text(parsed) -> str:
+    """Compatibility helper for callers that only need the bounded prompt."""
+    return _document_context(parsed)[0]
 
 
 def _visual_pages(pdf_path, max_pages: int = 3) -> list[str]:
@@ -305,7 +331,9 @@ async def _load_document_context(
                 logger.warning("Paper feature extraction failed; retaining parsed text", exc_info=True)
                 fetch_error = f"全文已读取，但检索索引生成失败（{type(exc).__name__}）"
         visuals = await run_pdf_work(_render_visual_pages, pdf_path)
-        return _document_text(parsed), visuals, f"fulltext:{source}", fetch_error
+        document_text, coverage_note = _document_context(parsed)
+        document_note = "；".join(note for note in (fetch_error, coverage_note) if note) or None
+        return document_text, visuals, f"fulltext:{source}", document_note
     except PDFBusyError as exc:
         raise HTTPException(
             status_code=503, detail=str(exc), headers={"Retry-After": "1"}
@@ -447,6 +475,9 @@ async def analyze_paper(
             if not paper_info:
                 raise HTTPException(status_code=404, detail="Paper not found")
 
+            # Metadata is already a plain dict. Release the read connection
+            # before an OA download that may wait up to 75 seconds.
+            await db.rollback()
             document_text, visual_pages, coverage, document_error = await _load_document_context(
                 paper_id, paper_info, db
             )
@@ -498,7 +529,7 @@ Abstract: {paper_info['abstract']}
         )
 
     source_note = (
-        "已获取并解析开放获取 PDF 正文、章节、表格和图注"
+        "已取得 PDF，以下只提供解析得到且预算允许的文字；全文来源不等于已完整阅读论文"
         if document_text
         else "未取得合法开放全文，本次仅基于元数据和摘要"
     )
@@ -516,6 +547,7 @@ Abstract: {paper_info['abstract']}
 - {source_note}
 - {visual_note}
 - 获取模式：{coverage}
+- 提取与覆盖提示：{document_error or '未检测到文字截断；仍须以提供的材料为准'}
 
 ## 论文正文与图表文本
 {document_text or '未取得全文；请严格限制在摘要信息内。'}
@@ -524,7 +556,8 @@ Abstract: {paper_info['abstract']}
 {request.query}
 
 请直接输出结构化的中文分析结果（纯文本，不用JSON格式）。
-开头必须用“材料覆盖：全文/摘要”明确本次依据，并说明是否读取了图表页面。
+开头必须说明材料来自 PDF 提取文字还是仅摘要；如果上方标明章节摘录或截断，必须写“全文节选”，不能声称已读完整论文。
+图表页面只是有界选取的部分页面，不代表所有图片已被读取；没有提供图像时不得声称看过图片。
 所有结论必须能由上方材料支持；材料未提供时必须明确写“材料未提供此信息”，禁止补写或猜测实验数据、模型结构和结论。
 分析应覆盖研究问题、方法、数据与实验设置、主要结果、图表证据、优点、局限及与用户问题的关系。"""
 
@@ -607,7 +640,11 @@ Abstract: {paper_info['abstract']}
         return AnalysisResult(
             paper_id=paper_id,
             analysis_type=request.analysis_type,
-            summary=response,
+            summary=(
+                f"> 材料覆盖：PDF 提取文字{('；' + document_error) if document_error else ''}。"
+                f"完成本次分析的模型收到 {used_visual_pages} 个图表页面，不代表覆盖所有图表。\n\n{response}"
+                if document_text else response
+            ),
             methodology=None,
             key_findings=[],
             strengths=[],

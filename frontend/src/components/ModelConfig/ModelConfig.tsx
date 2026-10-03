@@ -5,6 +5,7 @@ import { modelApi } from '@/api/client'
 import { useLocaleStore } from '@/stores/localeStore'
 import type { LLMProvider, ModelCapabilityProbeResult, ModelCapabilityReport, ModelConfig as ModelConfigType, ModelProbeTask, ModelTestResponse } from '@/api/types'
 import LocalModelServiceControl from './LocalModelServiceControl'
+import { safeErrorMessage } from '@/utils/safeError'
 import './ModelConfig.css'
 
 const providers: { value: LLMProvider; label: string; models: string[]; baseUrl?: string }[] = [
@@ -141,7 +142,7 @@ function TaskModelRow({ taskKey, icon, zhLabel, enLabel, desc, currentConfig, de
         total_tokens: 0,
         detail_zh: '真实能力测试未完成。',
         detail_en: 'The real capability probe did not complete.',
-        error: error?.response?.data?.detail || error?.message || (isZh ? '请求失败' : 'Request failed'),
+        error: safeErrorMessage(error, isZh ? '请求失败' : 'Request failed'),
       })
     } finally {
       setProbing(false)

@@ -117,6 +117,7 @@ class SearchOrchestrator:
                 query=request.query,
                 sources=request.sources,
                 user_constraints=all_constraints,
+                planning_mode=request.planning_mode,
             )
 
             # 更新排序器的意图

@@ -32,6 +32,22 @@ class TestCreateSearch:
         assert "message" in data
         isolate_search_worker.assert_called_once()
         assert isolate_search_worker.call_args.args[0] == data["run_id"]
+        assert isolate_search_worker.call_args.args[1].planning_mode == "auto"
+
+    @pytest.mark.parametrize("mode", ["auto", "rules", "ai"])
+    async def test_search_passes_selected_planning_mode_to_worker(self, client, isolate_search_worker, mode):
+        response = await client.post("/api/v1/search", json={
+            "query": "RAG", "planning_mode": mode,
+        })
+        assert response.status_code == 202
+        assert isolate_search_worker.call_args.args[1].planning_mode == mode
+
+    async def test_invalid_planning_mode_is_rejected_before_worker(self, client, isolate_search_worker):
+        response = await client.post("/api/v1/search", json={
+            "query": "RAG", "planning_mode": "unlimited",
+        })
+        assert response.status_code == 422
+        isolate_search_worker.assert_not_called()
 
     async def test_search_with_all_fields(self, client: AsyncClient):
         """包含所有可选字段的请求应成功"""

@@ -4,6 +4,16 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.10 source — real workflow acceptance and responsiveness
+
+- Exercise production business endpoints with authorized live GLM, Qwen and SenseNova calls using an isolated test library. Record 38 text-request attempts (34 completed, 4 HTTP 429), 50,573 reported tokens and two completed image generations; do not equate HTTP success with retrieval quality, complete paper coverage or billing.
+- Resolve compound product-help follow-ups without treating them as literature searches. Restore the user's research topic for elliptical follow-up retrieval while retaining the current category and source boundaries; prior model answers never become evidence.
+- Clarify that finding a search result does not automatically prepare assistant evidence. Preserve actual visual-reading failures and excerpt limits in paper detail instead of claiming that no figures were extracted or the entire paper was read.
+- Load the ordinary HTTPX trust store once per model client on a bounded worker pool. Retain TLS validation, environment CA and proxy behavior; cancelled waits retain capacity until certificate work finishes and never construct orphaned clients.
+- Keep online PDF parsing text-first: retain page text and captions without blocking on optional full-page native table detection. Disclose missing table structure, fix explicit extraction to use Table.extract(), and provide nonempty timeout feedback.
+
+See [live results, before/after concurrency samples and remaining quality gaps](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md). Offline regression: 1,087 backend + 163 frontend + 45 desktop + 18 packaging tests passed. These are source changes, not new installed Windows/macOS binaries; existing user data, profiles and LLM-Twin are unchanged.
+
 ### 1.2.9 source — search and analysis reliability
 
 - Add automatic, fast and explicit AI planning modes. Short topics skip planning-model calls; AI planning uses one approximately 20-second attempt, no SDK retry or alternate model, and a deterministic fallback. Record actual planning decisions without treating missing usage as free.

@@ -8,15 +8,47 @@ LLM 网关
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 from numbers import Number
+from threading import BoundedSemaphore
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+_SSL_WORKERS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="llm-tls")
+_SSL_SLOTS = BoundedSemaphore(4)  # Two running certificate loads, two queued.
+
+
+async def _load_ssl_context():
+    """Load the normal HTTPX trust store once, without blocking the event loop."""
+    import httpx
+
+    slots = _SSL_SLOTS
+    if not slots.acquire(blocking=False):
+        raise RuntimeError("Secure connection initialization is busy; retry shortly")
+    try:
+        work = _SSL_WORKERS.submit(httpx.create_ssl_context)
+    except BaseException:
+        slots.release()
+        raise
+    # Cancellation cannot stop a running certificate load. It must not release
+    # real capacity early or create an orphaned SDK/HTTP client afterwards.
+    work.add_done_callback(lambda _: slots.release())
+    pending = asyncio.wrap_future(work)
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        work.cancel()  # Only removes work that has not started.
+        pending.add_done_callback(
+            lambda done: None if done.cancelled() else done.exception()
+        )
+        raise
 
 
 class EmptyLLMResponseError(RuntimeError):
@@ -428,15 +460,23 @@ class LLMGateway:
                 raise ValueError(f"API key is not configured for provider: {self.provider}")
 
         if self._client is None:
-            self._client = openai.AsyncOpenAI(
-                api_key=api_key,
-                base_url=base_url,
-                # Retry is owned by _chat_openai so each failed attempt can
-                # rebuild a potentially unhealthy pooled connection. Keeping
-                # SDK retries enabled here would multiply attempts and latency.
-                max_retries=0,
+            ssl_context = await _load_ssl_context()
+            http_client = openai.DefaultAsyncHttpxClient(
+                verify=ssl_context,
                 timeout=120.0,
             )
+            try:
+                self._client = openai.AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    # Retry remains owned by _chat_openai, not the SDK.
+                    max_retries=0,
+                    timeout=120.0,
+                    http_client=http_client,
+                )
+            except BaseException:
+                await http_client.aclose()
+                raise
 
         response = await self._invoke_text_request(
             self._client.chat.completions.create,
@@ -472,9 +512,18 @@ class LLMGateway:
 
         retry_override = kwargs.pop("_max_retries", None)
         if self._client is None:
-            self._client = anthropic.AsyncAnthropic(
-                api_key=self._api_key or settings.ANTHROPIC_API_KEY,
+            ssl_context = await _load_ssl_context()
+            http_client = anthropic.DefaultAsyncHttpxClient(
+                verify=ssl_context,
             )
+            try:
+                self._client = anthropic.AsyncAnthropic(
+                    api_key=self._api_key or settings.ANTHROPIC_API_KEY,
+                    http_client=http_client,
+                )
+            except BaseException:
+                await http_client.aclose()
+                raise
         # Internal retry controls belong to the SDK client, not the Messages
         # payload. Keep the override request-local when reusing the gateway.
         client = (
@@ -616,17 +665,19 @@ class LLMGateway:
             payload["negative_prompt"] = negative_prompt
 
         try:
-            async with asyncio.timeout(300), httpx.AsyncClient(timeout=300.0, follow_redirects=False) as client:
-                async with client.stream("POST", url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
-                    if response.headers.get("content-encoding", "identity").lower() != "identity":
-                        raise ValueError("Compressed image response is not supported")
-                    raw = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        if len(raw) + len(chunk) > 2 * 1024 * 1024:
-                            raise ValueError("Image response is too large")
-                        raw.extend(chunk)
-                    data = json.loads(raw)
+            async with asyncio.timeout(300):
+                ssl_context = await _load_ssl_context()
+                async with httpx.AsyncClient(timeout=300.0, follow_redirects=False, verify=ssl_context) as client:
+                    async with client.stream("POST", url, json=payload, headers=headers) as response:
+                        response.raise_for_status()
+                        if response.headers.get("content-encoding", "identity").lower() != "identity":
+                            raise ValueError("Compressed image response is not supported")
+                        raw = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(raw) + len(chunk) > 2 * 1024 * 1024:
+                                raise ValueError("Image response is too large")
+                            raw.extend(chunk)
+                        data = json.loads(raw)
         except httpx.HTTPStatusError as e:
             return {
                 "status": "failed",
@@ -667,7 +718,7 @@ class LLMGateway:
 
         temporary_path = None
         try:
-            async with asyncio.timeout(120), httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+            async with asyncio.timeout(120), httpx.AsyncClient(timeout=120.0, follow_redirects=False, verify=ssl_context) as client:
                 async with client.stream("GET", image_url, headers={"Accept-Encoding": "identity"}) as img_resp:
                     img_resp.raise_for_status()
                     # Check before iterating: HTTP decompression otherwise occurs

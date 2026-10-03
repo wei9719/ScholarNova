@@ -364,22 +364,25 @@ export default function PaperDetailPanel({
           {analysis?.document_coverage === 'fulltext' && analysis.model_completed !== false ? (
             <>
               <FileCheck2 className="w-4 h-4 flex-shrink-0" />
-              <span>
-                {isChinese ? '已读取全文' : 'Full text read'}
-                {analysis.visual_pages_read > 0
-                  ? (isChinese ? `，并读取 ${analysis.visual_pages_read} 个图表页面` : ` with ${analysis.visual_pages_read} visual pages`)
-                  : (isChinese ? '；本篇未提取到可用图表页' : '; no visual page was extracted')}
-                {analysis.total_tokens > 0
-                  ? (isChinese ? `；模型 Token ${analysis.total_tokens}` : `; model tokens ${analysis.total_tokens}`)
-                  : ''}
-              </span>
+              <div className="min-w-0">
+                <span>
+                  {isChinese ? '已分析 PDF 文字' : 'PDF text analyzed'}
+                  {analysis.visual_pages_read > 0
+                    ? (isChinese ? `，并读取 ${analysis.visual_pages_read} 个图表页面` : ` with ${analysis.visual_pages_read} visual pages`)
+                    : (isChinese ? '；本次未成功读取图表页面' : '; no visual page was successfully read in this analysis')}
+                  {analysis.total_tokens > 0
+                    ? (isChinese ? `；模型 Token ${analysis.total_tokens}` : `; model tokens ${analysis.total_tokens}`)
+                    : ''}
+                </span>
+                {analysis.document_error && <p className="mt-1 opacity-80">{analysis.document_error}</p>}
+              </div>
             </>
           ) : fulltextStatus?.available && analysis?.model_completed === false ? (
             <div className="min-w-0">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                 <span>{isChinese
-                  ? '全文与图表已解析，但模型服务未完成本次分析；当前显示基础回退结果，请重试。'
+                  ? 'PDF 材料已准备，但模型服务未完成本次分析；当前显示基础回退结果，请重试。'
                   : 'The PDF was parsed, but the model did not complete this analysis. Retry to use the prepared full text.'}</span>
               </div>
               {analysis.document_error && <p className="mt-1 opacity-80">{analysis.document_error}</p>}

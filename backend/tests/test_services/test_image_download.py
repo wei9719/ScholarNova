@@ -2,7 +2,8 @@
 
 import base64
 import asyncio
-from unittest.mock import Mock
+import ssl
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -16,6 +17,13 @@ PROFILE = {'provider': 'sensenova', 'api_key': 'synthetic-test-key',
            'base_url': 'https://image.example/v1', 'model': 'fixture-image'}
 
 
+@pytest.fixture(autouse=True)
+def synthetic_trust_context(monkeypatch):
+    loader = AsyncMock(return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+    monkeypatch.setattr('app.services.llm.gateway._load_ssl_context', loader)
+    return loader
+
+
 def transport(monkeypatch, handler):
     original = httpx.AsyncClient
     monkeypatch.setattr('app.core.ssrf.validate_base_url', lambda _: (True, None))
@@ -26,7 +34,7 @@ def transport(monkeypatch, handler):
 
 
 @pytest.mark.asyncio
-async def test_image_saved_atomically_without_forwarding_api_key_to_cdn(tmp_path, monkeypatch):
+async def test_image_saved_atomically_without_forwarding_api_key_to_cdn(tmp_path, monkeypatch, synthetic_trust_context):
     requests = []
     def handler(request):
         requests.append(request)
@@ -42,6 +50,7 @@ async def test_image_saved_atomically_without_forwarding_api_key_to_cdn(tmp_path
     assert result['status'] == 'ok'
     assert path.read_bytes() == PNG
     assert len(requests) == 2 and not list(tmp_path.glob('*.part'))
+    synthetic_trust_context.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -3,12 +3,22 @@ LLM 网关测试
 """
 
 import asyncio
+import ssl
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.services.llm.gateway import LLMGateway
+
+
+@pytest.fixture(autouse=True)
+def synthetic_trust_context(monkeypatch):
+    # Transport behavior is mocked here; trust-store behavior has separate tests.
+    monkeypatch.setattr(
+        "app.services.llm.gateway._load_ssl_context",
+        AsyncMock(return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)),
+    )
 
 
 class TestLLMGateway:

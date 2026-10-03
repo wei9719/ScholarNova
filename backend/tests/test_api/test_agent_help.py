@@ -519,5 +519,52 @@ async def test_failure_followup_does_not_repeat_full_guide(client, isolated_help
     assert_product_help_metadata(data)
     assert "60 秒" in data["answer"]
     assert "重新发送这条追问" in data["answer"]
+
+
+@pytest.mark.parametrize("question", [
+    "我已经找到论文了，下一步怎么做？不要再重复软件介绍。",
+    "我已经导入PDF了，接下来呢？",
+    "我卡在选择来源这一步。具体一点，不要重复整段回答。",
+    "已经下载论文了；然后呢？",
+])
+def test_compound_progress_remains_help_only_with_uninterrupted_help_history(question):
+    assert _is_product_help(question, history_of("我该如何使用你"))
+    assert not _is_product_help(question)
+    assert not _is_product_help(question, history_of("我该如何使用你", "缓存延迟的结论是什么"))
+
+
+@pytest.mark.parametrize("question", [
+    "我已经找到论文了，下一步实验怎么设计？",
+    "我已经导入PDF了，分析Transformer的注意力机制。",
+    "我已经找到论文了，下一步比较这篇论文和RAG方法。",
+    "不要再重复软件介绍，交通预测的平均误差是多少？",
+    "我已经找到论文了，下一步怎么做？另外解释蛋白质折叠。",
+])
+def test_research_clause_cannot_be_hidden_inside_progress_followup(question):
+    assert not _is_product_help(question, history_of("我该如何使用你"))
+
+
+@pytest.mark.asyncio
+async def test_live_compound_progress_calls_model_without_retrieval_or_false_clarification(client, isolated_help):
+    chat, _ = isolated_help
+    chat.side_effect = None
+    chat.return_value = model_result("下一步在搜索页选中论文并分析；如果没有全文，请导入有权使用的 PDF。")
+    question = "我已经找到论文了，下一步怎么做？不要再重复软件介绍。"
+    response = await client.post("/api/v1/agent/chat", json={
+        "question": question, "use_zotero": False,
+        "history": [message.model_dump() for message in history_of("我该如何使用你？")],
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert_product_help_metadata(data)
+    assert data["inference_mode"] == "model"
+    assert data["answer"] == chat.return_value.content
+    assert data["model_attempts"] and data["total_tokens"] == 100
+    chat.assert_awaited_once()
+    prompt = chat.await_args.kwargs["messages"]
+    assert prompt[-1]["content"] == question
+    assert "仅输出一个具体的进度澄清问句" not in prompt[0]["content"]
+    assert "仅找到搜索结果不等于材料已进入智能体" in prompt[0]["content"]
+    assert "导入有权使用的 PDF 或将分析结论保存到知识库" in prompt[0]["content"]
     assert len(data["answer"]) < 180
     assert "1. 准备材料" not in data["answer"]

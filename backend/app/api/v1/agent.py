@@ -175,15 +175,29 @@ _HELP_FEEDBACK = re.compile(
 
 _HELP_STAGE_REPLY = re.compile(
     r"(?:(?:我)?(?:卡在|想先|还没|没有|已经|已|正在|先|是|想|不会|不太会))?"
-    r"(?:准备论文|导入论文|导入pdf|选择来源|开启来源|提出科研问题|输入问题|配置模型|配置api)"
+    r"(?:准备论文|找到论文|下载论文|下载pdf|导入论文|导入pdf|选择来源|开启来源|提出科研问题|输入问题|配置模型|配置api)"
     r"(?:这一步|这步|了)?"
+)
+_HELP_PRESENTATION = re.compile(
+    r"(?:请)?(?:不要|别)(?:再)?(?:重复|重述)(?:软件介绍|产品介绍|整段回答|之前的回答|刚才的回答)"
 )
 
 
+def _help_clauses(question: str) -> list[str]:
+    return [clause.strip() for clause in re.split(r"[，,。.!！?？;；]+", _normalize_help_question(question))
+            if clause.strip()]
+
+
 def _is_help_followup(question: str) -> bool:
-    normalized = _normalize_help_question(question)
-    return bool(_HELP_FOLLOWUP.fullmatch(normalized) or _HELP_FEEDBACK.fullmatch(normalized)
-                or _HELP_STAGE_REPLY.fullmatch(normalized))
+    clauses = _help_clauses(question)
+    followups = [bool(_HELP_FOLLOWUP.fullmatch(clause) or _HELP_FEEDBACK.fullmatch(clause)
+                      or _HELP_STAGE_REPLY.fullmatch(clause)) for clause in clauses]
+    # Every clause must describe product progress or the response style. A
+    # research request appended to a progress update must still use evidence.
+    return any(followups) and all(
+        followup or _HELP_PRESENTATION.fullmatch(clause)
+        for clause, followup in zip(clauses, followups)
+    )
 
 
 def _is_product_help(question: str, history: Sequence[AgentMessage] = ()) -> bool:
@@ -206,6 +220,35 @@ def _is_product_help(question: str, history: Sequence[AgentMessage] = ()) -> boo
         if not _is_help_followup(message.content):
             return False
     return False
+
+
+_RESEARCH_FOLLOWUP = re.compile(
+    r"^(?:请)?(?:把|将)?(?:刚才|上轮|上一轮|前一轮|上述|上面|前面)(?:的)?"
+    r"(?:限制|局限|结论|结果|方法|回答|证据|研究|分析|内容)|"
+    r"^(?:请)?(?:这些|那些|它们|这篇论文|这项研究)(?:的|有|是|能|如何|怎么|还|是否)"
+)
+_TOPIC_SWITCH = re.compile(r"换个话题|换一个话题|另一个问题|现在讨论|改为研究|先不讨论|暂时不管")
+
+
+def _contextual_retrieval_query(question: str, history: Sequence[AgentMessage]) -> str:
+    """Carry a user's topic into an elliptical follow-up, never past evidence."""
+    def is_followup(text: str) -> bool:
+        return not _TOPIC_SWITCH.search(text) and bool(
+            _RESEARCH_FOLLOWUP.search(_normalize_help_question(text)) or _is_help_followup(text)
+        )
+
+    if not is_followup(question):
+        return question
+    for message in reversed(history[-8:]):
+        if message.role != "user":
+            continue
+        if _is_product_help(message.content):
+            break
+        if not is_followup(message.content):
+            # History supplies search terms only. Candidate selection and the
+            # evidence pack still obey this request's current source/category.
+            return f"{message.content[:600]}\n{question}"
+    return question
 
 
 def _product_help_answer(question: str) -> str:
@@ -247,7 +290,9 @@ def _product_help_model_context(question: str) -> str:
     if re.search(r"[\u4e00-\u9fff]", question):
         return (
             "ScholarNova 是科研论文搜索与可追溯问答平台。真实功能事实：搜索页可检索并分析论文，"
-            "有权使用的 PDF 会建立本地全文片段；重要结论可保存到 ScholarNova 知识库。智能体页可按需"
+            "有权使用的 PDF 会建立本地全文片段；重要结论可保存到 ScholarNova 知识库。"
+            "仅找到搜索结果不等于材料已进入智能体：找到论文后先在搜索页打开并分析，"
+            "导入有权使用的 PDF 或将分析结论保存到知识库，再向智能体提问。智能体页可按需"
             "选择知识库和本机 Zotero 来源，再询问研究共识、方法差异、局限、研究空白或可验证问题。"
             "回答应提醒用户核对原文；材料不足要明确说明。设置页可测试模型连接，Zotero 需要本机已启动"
             "且允许本机应用通信。使用指导不需要论文，模型失败时必须显示状态而不是伪装成 AI 回答。"
@@ -255,7 +300,9 @@ def _product_help_model_context(question: str) -> str:
     return (
         "ScholarNova is a traceable academic-paper search and Q&A platform. Facts: Search can retrieve and "
         "analyze papers; authorized PDFs are indexed locally, and important findings can be saved to the "
-        "ScholarNova knowledge base. On Assistant, users choose the knowledge-base and local Zotero sources "
+        "ScholarNova knowledge base. Finding a search result alone does not prepare assistant evidence: "
+        "open and analyze the paper in Search, import an authorized PDF or save findings to Knowledge, "
+        "then ask the assistant. On Assistant, users choose the knowledge-base and local Zotero sources "
         "before asking about consensus, method differences, limitations, gaps, or testable questions. Tell "
         "users to verify important claims against the original paper and report insufficient evidence. Settings "
         "can test the model connection; Zotero must be running and allow local application communication."
@@ -266,7 +313,8 @@ async def _answer_product_help(request: AgentChatRequest) -> AgentChatResponse:
     """One bounded model call grounded in the product guide, never paper RAG."""
     guide = _product_help_answer(request.question)
     clarify_progress = bool(request.history and _is_help_followup(request.question)
-                            and not _HELP_STAGE_REPLY.fullmatch(_normalize_help_question(request.question))
+                            and not any(_HELP_STAGE_REPLY.fullmatch(clause)
+                                        for clause in _help_clauses(request.question))
                             and not re.search(r"(?:调用|用)(?:ai|模型)",
                                               _normalize_help_question(request.question)))
     result = AgentChatResponse(
@@ -479,6 +527,12 @@ async def chat_with_research_agent(
     evidence_items: list[tuple[str, str, str]] = []
     citations: list[AgentCitation] = []
     steps: list[AgentToolStep] = []
+    retrieval_query = _contextual_retrieval_query(request.question, request.history)
+    if retrieval_query != request.question:
+        steps.append(AgentToolStep(
+            tool="contextual_query", status="completed", count=1,
+            detail="使用最近用户问题补充追问的检索主题；仍限定当前资料范围，历史回答不作为证据。",
+        ))
     knowledge_candidates: list[RetrievalChunk] = []
     paper_candidates: list[RetrievalChunk] = []
     zotero_candidates: list[RetrievalChunk] = []
@@ -506,7 +560,7 @@ async def chat_with_research_agent(
         try:
             zotero_client = ZoteroLocalClient()
             zotero_items: list[dict[str, Any]] = []
-            for zotero_query in _zotero_queries(request.question):
+            for zotero_query in _zotero_queries(retrieval_query):
                 zotero_items = await zotero_client.search_items(zotero_query, limit=4)
                 if zotero_items:
                     break
@@ -523,7 +577,7 @@ async def chat_with_research_agent(
 
     retrieval = await rank_chunks_hybrid(
         db,
-        request.question,
+        retrieval_query,
         [*knowledge_candidates, *paper_candidates, *zotero_candidates],
         limit=2 if get_model_for_task("assistant").get("provider") == "local" else 6,
         max_per_document=2,

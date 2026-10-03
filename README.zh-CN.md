@@ -6,9 +6,9 @@
 
 一个面向个人研究者的桌面科研工作台：**找论文 → 读全文 → 存知识 → 基于证据问答 → 规划研究路线**。支持中文 / English、明暗主题和自带模型 API Key（BYOK）。
 
-**当前源码：1.2.9，尚未发布安装包。** 搜索可选自动、快速和 AI 规划；长文分析明确节选范围；模型等待不再长期占用数据库连接，旧任务不会覆盖已修改的路线；出图成功须通过实际下载和文件校验。详见 [本轮修复与测试案例](docs/reports/v1.2.9-search-analysis-reliability.zh-CN.md) 和 [板块用途与完整研究流程](docs/reports/v1.2.8-research-workflow.zh-CN.md)。此前的 [并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md) 和 [13 个同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md) 继续保留。已发布下载仍以 Release 附件为准，不会自动更新已安装的软件；Zotero 优化与本地模型接入暂缓，现有配置不变。
+**当前源码：1.2.10，尚未发布安装包。** 真实业务测试发现并修复了帮助/科研追问丢上下文、证书加载阻塞、长论文表格扫描拖垮正文，以及视觉降级提示不准确的问题。详见 [真实验收与剩余问题](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md)、[搜索与分析设计](docs/reports/v1.2.9-search-analysis-reliability.zh-CN.md) 和 [完整研究流程](docs/reports/v1.2.8-research-workflow.zh-CN.md)。[并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md) 和 [13 个同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md) 继续保留。已发布下载仍以 Release 附件为准，源码更新不会自动升级已安装软件；Zotero 优化与本地模型接入暂缓，用户配置不变。
 
-**真实 API 验证（10 月 3 日）**：GLM/千问 12 次短文本调用完成，服务商报告 1,848 Token；Semantic Scholar 匿名请求仍出现 429。详见 [全场景覆盖、真实耗时与待验证项目](docs/reports/live-api-scenarios-2026-10-03.zh-CN.md)。这不是全功能端到端通过或真实高并发容量承诺。
+**真实 API 验证（10 月 3 日）**：本轮 38 次文本请求尝试中 34 次完成、4 次返回 429，服务商报告 50,573 Token，另完成 2 张路线图片。六任务/并发三的小样本总耗时从约 56 秒降到 34 秒；公开论文复测实际读取文字节选和 3 个图表页。**复杂检索相关性仍未通过验收**，不能据此声称全功能无问题或已证明极限并发容量。此前的 [短文本探测及 Semantic Scholar 匿名限流记录](docs/reports/live-api-scenarios-2026-10-03.zh-CN.md) 单独保留，未混入本轮统计。
 
 ## 下载与安装
 

@@ -148,7 +148,10 @@ def _document_context(parsed) -> tuple[str, str]:
     """Bound supplied text and disclose selection/truncation separately."""
     budget = 48_000
     parts: list[str] = []
-    notes: list[str] = []
+    notes: list[str] = [
+        warning for warning in (getattr(parsed, "metadata", None) or {}).get("parse_warnings", [])
+        if isinstance(warning, str) and warning.strip()
+    ]
     priority = (
         "abstract", "introduction", "method", "approach", "experiment",
         "result", "discussion", "limitation", "conclusion",
@@ -334,6 +337,9 @@ async def _load_document_context(
         document_text, coverage_note = _document_context(parsed)
         document_note = "；".join(note for note in (fetch_error, coverage_note) if note) or None
         return document_text, visuals, f"fulltext:{source}", document_note
+    except TimeoutError:
+        logger.warning("OA full-text preparation exceeded its waiting budget")
+        return "", [], "abstract", "全文准备超过本次等待时限，本次仅使用摘要；请稍后重试或导入授权 PDF"
     except PDFBusyError as exc:
         raise HTTPException(
             status_code=503, detail=str(exc), headers={"Retry-After": "1"}
@@ -437,6 +443,10 @@ async def _save_fulltext(paper_id: str, file: UploadFile, db: AsyncSession) -> d
         # The route's dependency commit occurs after this function returns,
         # which is too late: the per-paper lock must still protect publication.
         await db.commit()
+    except TimeoutError:
+        await db.rollback()
+        feature_count = 0
+        feature_error = "PDF 已保存，旧索引已清除；解析超过本次等待时限，请稍后重试建立索引"
     except PDFBusyError:
         await db.rollback()
         feature_error = "PDF 已保存，旧索引已清除；解析服务正忙，请稍后重试建立索引"
@@ -612,10 +622,14 @@ Abstract: {paper_info['abstract']}
                 for key in usage:
                     usage[key] += int(visual_gateway.usage.get(key, 0) or 0)
                 used_visual_pages = 0
+                visual_error = (
+                    f"已提取 {len(visual_pages)} 个图表页面，但视觉模型未完成读取；"
+                    "本次仅依据正文、图注和表格文字分析，可稍后重试图表读取"
+                )
+                document_error = "；".join(filter(None, (document_error, visual_error)))
                 text_only_prompt = prompt.replace(
                     visual_note,
-                    "当前配置的视觉模型未接受页面图像；本次仅依据正文、"
-                    "图注和表格文本分析",
+                    visual_error,
                 )
                 routed = await chat_with_fallback(
                     task="analysis",

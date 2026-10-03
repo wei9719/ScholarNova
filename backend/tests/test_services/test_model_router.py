@@ -292,6 +292,7 @@ async def test_gateway_adapter_disables_thinking_and_preserves_failed_usage(monk
 async def test_real_gateway_router_reports_transport_and_usage_independently(monkeypatch, outcome):
     import httpx
     import openai
+    import ssl
 
     from app.services.llm.gateway import LLMGateway
 
@@ -313,6 +314,10 @@ async def test_real_gateway_router_reports_transport_and_usage_independently(mon
             if outcome == "reported-usage" else None,
         )
     monkeypatch.setattr("openai.AsyncOpenAI", lambda **kwargs: client)
+    monkeypatch.setattr(
+        "app.services.llm.gateway._load_ssl_context",
+        AsyncMock(return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)),
+    )
     monkeypatch.setattr("app.services.inference.model_router.get_fallback_model_config", lambda: {
         "enabled": True, "provider": "qwen", "model": "must-not-use-fallback",
     })

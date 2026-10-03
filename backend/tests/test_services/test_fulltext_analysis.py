@@ -228,7 +228,11 @@ async def test_visible_coverage_is_not_left_to_model_claims(monkeypatch, vision)
                                             SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock()))
     assert all(note in prompt and "必须写“全文节选”" in prompt for prompt in captured)
     assert result.document_coverage == "fulltext"  # Compatibility: source availability, not full reading.
-    assert result.document_error == note
+    if vision == "rejected":
+        assert result.document_error.startswith(note + "；")
+        assert "视觉模型未完成读取" in result.document_error
+    else:
+        assert result.document_error == note
     assert result.summary.startswith("> 材料覆盖：PDF 提取文字；" + note)
     count = 1 if vision == "accepted" else 0
     assert result.visual_pages_read == count

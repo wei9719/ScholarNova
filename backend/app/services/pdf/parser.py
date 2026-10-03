@@ -136,9 +136,14 @@ class PDFParser:
     使用 PyMuPDF 解析 PDF 文件，提取结构化文档对象。
     """
 
-    def __init__(self):
-        """初始化 PDF 解析器"""
-        pass
+    def __init__(self, *, extract_tables: bool = False):
+        """Keep online parsing text-first; native table detection is opt-in.
+
+        find_tables() can take tens of seconds on a single graphics-heavy page
+        and cannot be interrupted safely by cancelling its asyncio waiter.
+        Explicit offline extraction still uses the same sole PDF worker.
+        """
+        self._include_tables = extract_tables
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -334,11 +339,18 @@ class PDFParser:
         # 提取参考文献
         references = self._extract_references(combined_text)
 
-        # 提取表格
-        tables = self._extract_tables(doc)
-
         # 提取图片描述
         figures = self._extract_figure_captions_from_pages(page_texts)
+
+        # Optional structure recovery must not delay usable online text/figures.
+        # The page text above retains extractable table text, but not reliable
+        # row/column relationships. Do not describe this as full table reading.
+        warnings: list[str] = []
+        tables = self._extract_tables(doc, warnings) if self._include_tables else []
+        if not self._include_tables:
+            warnings.append("已保留页文本中可提取的表格文字，未执行结构化表格识别；行列对应关系需结合原页核对")
+        if warnings:
+            metadata["parse_warnings"] = warnings
 
         return ParsedDocument(
             title=title,
@@ -757,12 +769,13 @@ class PDFParser:
     # 内部方法：表格
     # ------------------------------------------------------------------
 
-    def _extract_tables(self, doc) -> list[dict]:
+    def _extract_tables(self, doc, warnings: Optional[list[str]] = None) -> list[dict]:
         """
         提取 PDF 中的表格。
         使用 PyMuPDF 的 find_tables() 功能。
         """
         tables: list[dict] = []
+        failed_pages: list[int] = []
         try:
             for page_num in range(doc.page_count):
                 page = doc[page_num]
@@ -771,7 +784,7 @@ class PDFParser:
                     for i, table in enumerate(tab_finder.tables):
                         # 提取表格数据
                         rows = []
-                        for row in table.extract_rows():
+                        for row in table.extract():
                             cells = [
                                 re.sub(r"\s+", " ", str(cell or "")).strip()
                                 for cell in row
@@ -792,10 +805,17 @@ class PDFParser:
                                 }
                             )
                 except Exception:
-                    # 某些页面可能不支持表格检测
+                    failed_pages.append(page_num + 1)
                     continue
         except Exception as e:
             logger.warning(f"Table extraction failed: {e}")
+            if warnings is not None:
+                warnings.append("结构化表格提取未完成；已保留可提取的页文本")
+        if failed_pages and warnings is not None:
+            pages = "、".join(str(page) for page in failed_pages[:10])
+            warnings.append(
+                f"第 {pages} 页等共 {len(failed_pages)} 页结构化表格提取失败；已保留可提取的页文本"
+            )
 
         return tables
 

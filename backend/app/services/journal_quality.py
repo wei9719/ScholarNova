@@ -19,6 +19,7 @@ from typing import Any, Optional
 import httpx
 
 from app.config import runtime_path, settings
+from app.core.tls import load_ssl_context
 from app.schemas.paper import PaperQuality
 
 
@@ -26,6 +27,7 @@ _DATA_PATH = runtime_path("journal_rankings.json")
 _OPENALEX_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _OPENALEX_CACHE_SECONDS = 7 * 24 * 60 * 60
 _OPENALEX_SEMAPHORE = asyncio.Semaphore(3)
+_OPENALEX_BUDGET_SECONDS = 8.0
 
 
 def normalize_journal_name(value: str) -> str:
@@ -235,8 +237,13 @@ async def lookup_openalex_metrics(venue: str) -> dict[str, Any]:
     if email:
         params["mailto"] = email
 
-    async with _OPENALEX_SEMAPHORE:
-        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+    # This optional enrichment shares one deadline for queueing, trust-store
+    # preparation and the request; it must not stall paper details under load.
+    async with asyncio.timeout(_OPENALEX_BUDGET_SECONDS), _OPENALEX_SEMAPHORE:
+        context = await load_ssl_context()
+        async with httpx.AsyncClient(
+            timeout=_OPENALEX_BUDGET_SECONDS, follow_redirects=True, verify=context,
+        ) as client:
             response = await client.get("https://api.openalex.org/sources", params=params)
             response.raise_for_status()
             candidates = response.json().get("results", [])
@@ -285,7 +292,7 @@ async def lookup_journal_quality(
     quality = apply_local_ranking(quality, venue)
     try:
         open_metrics = await lookup_openalex_metrics(venue)
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError, TimeoutError, RuntimeError, OSError):
         open_metrics = {}
     if open_metrics:
         # Imported licensed data remains authoritative for official partitions.

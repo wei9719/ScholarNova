@@ -4,6 +4,17 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.11 source — meaningful relevance and usable paper recommendations
+
+- Preserve Chinese subjects and repair/forecasting tasks during rule translation; normalize bilingual terms and require domain evidence instead of allowing generic `data`/`model` matches to dominate. Apply relevance tiers before quality/diversity ranking.
+- Separate relevance and composite sorting. Filter current results by actual abstract availability, show counts and missing-abstract guidance, and reset filters on every new search, including the same query. Match scores are heuristic, not probabilities.
+- Add bounded, metadata-only seed recommendations from OpenAlex and Crossref: related research, observable abstract-structure cues and exact-name same-journal references. Show source status and sample-based term/brand counts; do not invent abstracts or journal-wide frequencies.
+- Persist recommendation records with DOI identity reuse so the user can open and analyze them. Cancel obsolete frontend requests and prevent late paper details from replacing the current selection.
+- Share DOI/Corpus-ID persistence with ordinary search, committing usable local IDs before publishing results; a duplicate from another source no longer invalidates a batch. Prepare source TLS contexts on the existing bounded worker pool, preserving certificate checks and proxy settings without blocking async timeouts.
+- Bound optional journal enrichment by an eight-second total deadline, including queueing and TLS initialization. Cached metrics remain immediate, and failed enrichment preserves existing quality fields rather than blocking paper details.
+
+See [validation and manual scenarios](docs/reports/v1.2.11-search-recommendations.zh-CN.md). No new model calls are required for these features; user profiles, Zotero and LLM-Twin are unchanged. Public installers remain those actually attached to a Release.
+
 ### 1.2.10 source — real workflow acceptance and responsiveness
 
 - Exercise production business endpoints with authorized live GLM, Qwen and SenseNova calls using an isolated test library. Record 38 text-request attempts (34 completed, 4 HTTP 429), 50,573 reported tokens and two completed image generations; do not equate HTTP success with retrieval quality, complete paper coverage or billing.

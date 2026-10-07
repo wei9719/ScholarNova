@@ -27,7 +27,7 @@ import logging
 import math
 import re
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from app.schemas.paper import Paper, PaperQuality
 
@@ -45,6 +45,30 @@ WEIGHT_OA = 0.05
 
 # MRF lambda
 MMR_LAMBDA = 0.75
+
+# Broad academic vocabulary is not evidence of a shared research topic.
+GENERIC_TERMS = {
+    "data", "model", "method", "approach", "framework", "system", "algorithm",
+    "application", "research", "paper", "study", "survey", "comparison", "experiment",
+}
+STOP_WORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "and", "or", "of", "for", "to", "in", "on", "at", "by", "with", "from",
+    "this", "that", "these", "those", "it", "its", "we", "our", "you", "your",
+    "as", "about", "using", "use", "used", "based", "via", "into", "can", "how",
+    "find", "please", "et", "al",
+}
+TERM_VARIANTS = {
+    "models": "model", "methods": "method", "approaches": "approach",
+    "systems": "system", "algorithms": "algorithm", "applications": "application",
+    "papers": "paper", "studies": "study", "networks": "network", "images": "image",
+    "predict": "prediction", "predicting": "prediction", "predictions": "prediction",
+    "forecast": "prediction", "forecasting": "prediction", "forecasts": "prediction",
+    "impute": "repair", "imputation": "repair", "imputing": "repair",
+    "repairing": "repair", "restoration": "repair", "inpainting": "repair",
+    "completion": "repair", "classify": "classification", "detect": "detection",
+}
+TASK_TERMS = {"repair", "prediction", "classification", "detection", "segmentation", "generation"}
 
 
 class Ranker:
@@ -221,30 +245,42 @@ class Ranker:
         scoring_query = QueryPlanner.resolve_paper_alias(query)
         en_query = QueryPlanner._translate_to_english(scoring_query).lower()
 
-        # 2. 提取所有关键词（中文原词 + 英文翻译 + 停用词过滤后的 token）
-        all_keywords = set()
-        # 英文翻译的 token
-        en_tokens = self._tokenize(en_query)
-        all_keywords.update(en_tokens)
-        # 原查询的 token
-        raw_tokens = self._tokenize(query)
-        all_keywords.update(raw_tokens)
-
+        # Both sides use the same phrase translation and word boundaries.
+        # Unknown Chinese subjects remain matchable, rather than collapsing to data.
+        all_keywords = set(self._tokenize(scoring_query))
+        informative = all_keywords - GENERIC_TERMS
+        if informative:
+            all_keywords = informative
         if not all_keywords:
             return 0.0
+        title_tokens = set(self._tokenize(title))
+        abstract_tokens = set(self._tokenize(abstract))
 
-        # 3. 标题权重高于摘要，避免“摘要命中”压过“标题精确命中”
-        title_hits = sum(1 for kw in all_keywords if kw in title)
-        title_ratio = title_hits / len(all_keywords) if all_keywords else 0
-        abstract_hits = sum(1 for kw in all_keywords if kw in abstract)
-        abstract_ratio = abstract_hits / len(all_keywords) if all_keywords else 0
-        base_score = 0.65 * title_ratio + 0.35 * abstract_ratio
+        def coverage(terms: set[str]) -> float:
+            return sum(
+                1.0 if term in title_tokens else 0.5 if term in abstract_tokens else 0.0
+                for term in terms
+            ) / len(terms) if terms else 0.0
 
-        # 4. 完整短语标题匹配获得稳定优先级
-        if en_query and en_query in title:
-            base_score = max(base_score, 0.95)
-        elif len(en_tokens) > 1 and all(token in title for token in en_tokens):
-            base_score = max(base_score, 0.88)
+        # Matching the task (e.g. repair) alone cannot establish the domain.
+        # A shared domain with a different task (prediction) is a useful neighbor,
+        # not an exact answer. Citations and venue never enter this score.
+        tasks = all_keywords & TASK_TERMS
+        topics = all_keywords - TASK_TERMS
+        if topics and tasks:
+            topic_coverage = coverage(topics)
+            task_coverage = coverage(tasks)
+            base_score = 0.75 * topic_coverage + 0.25 * task_coverage
+            if not topic_coverage:
+                base_score = 0.15 * task_coverage
+            elif len(topics & (title_tokens | abstract_tokens)) / len(topics) < 0.75:
+                base_score = min(base_score, 0.35)
+            elif not task_coverage:
+                base_score = min(base_score, 0.65)
+        else:
+            base_score = coverage(all_keywords)
+        if all_keywords <= title_tokens:
+            base_score = 0.95
 
         # 5. “标题简称 by 作者 et al.” 是学术精确查找的常见写法。
         # 标题线索与作者姓氏同时命中时必须压过引用量和时效性。
@@ -257,9 +293,7 @@ class Ranker:
             if citation_match:
                 title_hint = self._tokenize(citation_match.group(1))
                 author_hint = citation_match.group(2).casefold()
-                title_matches = bool(title_hint) and all(
-                    token in title for token in title_hint
-                )
+                title_matches = bool(title_hint) and set(title_hint) <= title_tokens
                 author_matches = any(
                     author_hint in author.casefold() for author in paper.authors
                 )
@@ -320,7 +354,7 @@ class Ranker:
                         "dataset", "model", "system", "method",
                     }
                 ]
-                if alias_tokens and all(token in title for token in alias_tokens):
+                if alias_tokens and set(alias_tokens) <= title_tokens:
                     base_score = 1.0
 
         return min(base_score, 1.0)
@@ -558,8 +592,13 @@ class Ranker:
         if not scored_papers:
             return []
 
-        # 按 base_score 预排序
-        scored_papers.sort(key=lambda x: x["base_score"], reverse=True)
+        # Quality and diversity only reorder within a relevance tier; otherwise
+        # an unrelated but highly cited paper can consume a limited result slot.
+        def relevance_tier(item: dict) -> int:
+            score = item["breakdown"]["relevance"]
+            return 2 if score >= 0.7 else 1 if score >= 0.45 else 0
+
+        scored_papers.sort(key=lambda x: (relevance_tier(x), x["base_score"]), reverse=True)
 
         selected: List[dict] = []
         remaining = list(scored_papers)
@@ -572,8 +611,11 @@ class Ranker:
         while remaining and len(selected) < diversity_limit:
             best_idx = -1
             best_mmr = -float("inf")
+            best_tier = relevance_tier(remaining[0])
 
             for i, candidate in enumerate(remaining):
+                if relevance_tier(candidate) != best_tier:
+                    continue
                 # 计算与已选集合的最大相似度
                 max_sim = 0.0
                 for sel in selected:
@@ -637,7 +679,7 @@ class Ranker:
     @staticmethod
     def _tokenize(text: str) -> List[str]:
         """
-        分词：转小写，按非字母数字字符分割
+        Word-boundary tokens plus Chinese bigrams for terms outside the glossary.
 
         Args:
             text: 输入文本
@@ -647,7 +689,17 @@ class Ranker:
         """
         if not text:
             return []
-        return [t.lower() for t in re.findall(r"[a-zA-Z0-9]+", text) if len(t) > 1]
+        from app.services.search.query_planner import QueryPlanner
+
+        normalized = QueryPlanner._translate_to_english(text).lower()
+        tokens = [TERM_VARIANTS.get(term, term)
+                  for term in re.findall(r"[a-z0-9]+", normalized)
+                  if len(term) > 1 and term not in STOP_WORDS]
+        for segment in re.findall(r"[\u4e00-\u9fff]+", normalized):
+            if segment in {"基于", "关于", "用于", "使用", "研究", "论文", "文献", "中的", "中的使用"}:
+                continue
+            tokens.extend(segment[index:index + 2] for index in range(len(segment) - 1))
+        return tokens
 
     @staticmethod
     def _token_overlap_score(query_tokens: List[str], doc_tokens: List[str]) -> float:

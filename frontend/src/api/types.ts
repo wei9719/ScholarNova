@@ -46,6 +46,27 @@ export interface RecommendationRequest {
   limit?: number
 }
 
+export type SimilarPaperMode = 'topic' | 'structure' | 'journal'
+
+export interface SimilarPapersResponse {
+  mode: SimilarPaperMode
+  seed_paper_id: string
+  items: Array<{ paper: Paper; reason: string; matched_terms: string[]; structure_labels: string[] }>
+  scope: string
+  warnings: string[]
+  statistics: {
+    candidate_count: number
+    matched_count: number
+    returned_count: number
+    same_venue_count: number
+    terms: Array<{ term: string; count: number }>
+    basis: 'retrieved_candidates'
+    term_sample_count: number
+    term_sample_scope: 'same_venue' | 'retrieved_candidates'
+  }
+  source_statuses: Array<{ source: string; success: boolean; paper_count: number; elapsed_ms: number; error?: string | null }>
+}
+
 export interface RecommendationFeedback {
   recommendation_id: string
   feedback_type: FeedbackType

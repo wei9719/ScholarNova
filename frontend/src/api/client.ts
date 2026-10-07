@@ -11,6 +11,8 @@ import type {
   RecommendationRequest,
   RecommendationResponse,
   RecommendationFeedback,
+  SimilarPaperMode,
+  SimilarPapersResponse,
   ModelConfig,
   ModelCapabilityReport,
   ModelCapabilityProbeResult,
@@ -130,6 +132,10 @@ export const papersApi = {
 // =============================================================================
 
 export const recommendationsApi = {
+  similar: (paperId: string, mode: SimilarPaperMode, signal?: AbortSignal) =>
+    api.post<SimilarPapersResponse>('/recommendations/similar',
+      { paper_id: paperId, mode, limit: 6 }, { signal, timeout: 60000 }),
+
   get: (request: RecommendationRequest) =>
     api.post<RecommendationResponse>('/recommendations', request),
 

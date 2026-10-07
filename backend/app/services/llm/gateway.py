@@ -8,47 +8,21 @@ LLM 网关
 """
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 from numbers import Number
-from threading import BoundedSemaphore
 from typing import Any, List, Optional
 from urllib.parse import urlparse
 
 from app.config import settings
+from app.core.tls import SSL_SLOTS as _SSL_SLOTS, SSL_WORKERS as _SSL_WORKERS, load_ssl_context
 
 logger = logging.getLogger(__name__)
 
 
-_SSL_WORKERS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="llm-tls")
-_SSL_SLOTS = BoundedSemaphore(4)  # Two running certificate loads, two queued.
-
-
 async def _load_ssl_context():
-    """Load the normal HTTPX trust store once, without blocking the event loop."""
-    import httpx
-
-    slots = _SSL_SLOTS
-    if not slots.acquire(blocking=False):
-        raise RuntimeError("Secure connection initialization is busy; retry shortly")
-    try:
-        work = _SSL_WORKERS.submit(httpx.create_ssl_context)
-    except BaseException:
-        slots.release()
-        raise
-    # Cancellation cannot stop a running certificate load. It must not release
-    # real capacity early or create an orphaned SDK/HTTP client afterwards.
-    work.add_done_callback(lambda _: slots.release())
-    pending = asyncio.wrap_future(work)
-    try:
-        return await asyncio.shield(pending)
-    except asyncio.CancelledError:
-        work.cancel()  # Only removes work that has not started.
-        pending.add_done_callback(
-            lambda done: None if done.cancelled() else done.exception()
-        )
-        raise
+    """Compatibility hook; academic sources and the gateway share TLS capacity."""
+    return await load_ssl_context(workers=_SSL_WORKERS, slots=_SSL_SLOTS)
 
 
 class EmptyLLMResponseError(RuntimeError):

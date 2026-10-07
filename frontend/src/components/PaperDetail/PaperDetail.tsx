@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import {
   X, ExternalLink, Copy, Check, Loader2, Sparkles, BookOpen,
   Calendar, Hash, Users, Lightbulb, AlertTriangle, FlaskConical,
-  Languages, BookMarked, FileUp, FileCheck2,
+  Languages, BookMarked, FileUp, FileCheck2, Library,
 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useLocaleStore } from '@/stores/localeStore'
 import { knowledgeApi, papersApi, zoteroApi } from '@/api/client'
-import type { PaperDetail as PaperDetailType, AnalysisResult, FulltextStatus } from '@/api/types'
+import type { Paper, PaperDetail as PaperDetailType, AnalysisResult, FulltextStatus } from '@/api/types'
 import KnowledgeForm from '@/components/KnowledgeForm/KnowledgeForm'
+import SimilarPapers from './SimilarPapers'
+import { getAbstractText } from '@/utils/abstract'
 import './PaperDetail.css'
 
 interface PaperDetailProps {
@@ -22,6 +24,7 @@ interface PaperDetailProps {
   onClose: () => void
   onAnalyze: (query?: string) => void
   onFulltextUploaded: () => void
+  onSelectPaper?: (paper: Paper) => void
 }
 
 type AnalysisKey = 'full' | 'research_points' | 'limitations' | 'methodology'
@@ -35,11 +38,11 @@ const analysisConfig: Record<AnalysisKey, { icon: any; zhLabel: string; enLabel:
 
 export default function PaperDetailPanel({
   paper, analysis, analysisLoading,
-  onClose, onAnalyze, onFulltextUploaded,
+  onClose, onAnalyze, onFulltextUploaded, onSelectPaper,
 }: PaperDetailProps) {
   const { locale } = useLocaleStore()
   const [copiedField, setCopiedField] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'abstract' | 'analysis' | 'evidence'>('abstract')
+  const [activeTab, setActiveTab] = useState<'abstract' | 'analysis' | 'similar'>('abstract')
   const [translatedAbstract, setTranslatedAbstract] = useState<string | null>(null)
   const [translating, setTranslating] = useState(false)
   const [activeAnalysis, setActiveAnalysis] = useState<AnalysisKey | null>(null)
@@ -57,6 +60,7 @@ export default function PaperDetailPanel({
   const fulltextInputRef = useRef<HTMLInputElement>(null)
 
   const isChinese = locale === 'zh'
+  const abstractText = getAbstractText(paper.abstract)
 
   // 切换论文时重置所有一次性状态，避免残留上一篇的翻译/分析
   useEffect(() => {
@@ -433,20 +437,22 @@ export default function PaperDetailPanel({
 
       {/* Tabs */}
       <div className="paper-detail-tabs">
-        {(['abstract', 'analysis'] as const).map((tab) => (
+        {(['abstract', 'analysis', 'similar'] as const).map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)} className={clsx('paper-tab', activeTab === tab && 'paper-tab-active')}>
             {tab === 'abstract' && <BookOpen className="w-3.5 h-3.5" />}
             {tab === 'analysis' && <Sparkles className="w-3.5 h-3.5" />}
-            {tab === 'abstract' ? (isChinese ? '摘要' : 'Abstract') : (isChinese ? '分析' : 'Analysis')}
+            {tab === 'similar' && <Library className="w-3.5 h-3.5" />}
+            {tab === 'abstract' ? (isChinese ? '摘要' : 'Abstract') : tab === 'analysis' ? (isChinese ? '分析' : 'Analysis') : (isChinese ? '相似推荐' : 'Similar papers')}
           </button>
         ))}
       </div>
 
       {/* Content */}
       <div className="paper-detail-content custom-scrollbar">
+        {activeTab === 'similar' && <SimilarPapers key={paper.id} paperId={paper.id} onSelect={onSelectPaper} />}
         {activeTab === 'abstract' && (
           <div className="animate-fade-in">
-            {paper.abstract && (
+            {abstractText && (
               <button onClick={handleTranslate} disabled={translating}
                 className="inline-flex items-center gap-1 px-2.5 py-1 mb-3 rounded-md text-xs font-medium bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-900/50 transition-colors">
                 {translating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Languages className="w-3 h-3" />}
@@ -455,9 +461,12 @@ export default function PaperDetailPanel({
             )}
             {translatedAbstract
               ? <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-line">{translatedAbstract}</p>
-              : paper.abstract
-                ? <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-line">{paper.abstract}</p>
-                : <p className="text-sm text-gray-400 dark:text-gray-500 italic">{isChinese ? '暂无摘要' : 'No abstract available'}</p>
+              : abstractText
+                ? <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-line">{abstractText}</p>
+                : <div className="space-y-2 text-sm text-gray-500 dark:text-gray-400">
+                    <p>{isChinese ? '当前数据源未提供摘要，这不代表论文没有摘要。' : 'The current source did not provide an abstract; the paper may still have one.'}</p>
+                    <p>{isChinese ? '可在搜索结果选择“有摘要”；如需阅读本篇，请通过图书馆或出版方获取你有权使用的 PDF，再点击上方“导入全文 PDF”。' : 'Filter results to papers with abstracts, or obtain an authorized PDF from your library or publisher and use Import PDF above.'}</p>
+                  </div>
             }
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
               <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">{isChinese ? '引用格式' : 'Citation'}</h4>

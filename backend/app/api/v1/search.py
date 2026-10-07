@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limiter import check_rate_limit
@@ -616,7 +617,16 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
             if ranked_papers:
                 print(f"[SEARCH] first paper title: {ranked_papers[0].title[:50]}")
 
-            # 6. 完成：先发布缓存结果，再进行非阻塞的论文持久化。
+            # 6. Save actionable paper IDs before publishing completed results.
+            from app.services.paper_persistence import persist_papers
+
+            try:
+                ranked_papers = await persist_papers(db, ranked_papers)
+                await db.commit()
+            except SQLAlchemyError:
+                await db.rollback()
+                raise RuntimeError("论文详情暂未能保存，请重新检索；本次不发布无法打开的结果。") from None
+
             latency_ms = (time.time() - start_time) * 1000
             search_run.latency_ms = latency_ms
             search_run.model_name = settings.OPENAI_DEFAULT_MODEL
@@ -669,46 +679,6 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 "latency_ms": latency_ms,
             })
             await db.commit()
-
-            # Persist paper detail records after the run is visible as completed.
-            try:
-                from app.models.paper import PaperEntity
-
-                ranked_ids = [str(p.id) for p in ranked_papers]
-                existing_ids = set()
-                if ranked_ids:
-                    existing_ids = set(
-                        (
-                            await db.execute(
-                                select(PaperEntity.id).where(PaperEntity.id.in_(ranked_ids))
-                            )
-                        ).scalars().all()
-                    )
-                for p in ranked_papers:
-                    if str(p.id) in existing_ids:
-                        continue
-                    db.add(PaperEntity(
-                        id=str(p.id),
-                        title=p.title,
-                        abstract=p.abstract,
-                        authors=[{"name": a} for a in p.authors] if p.authors else [],
-                        year=p.year,
-                        venue=p.venue,
-                        doi=p.doi,
-                        url=p.url,
-                        pdf_url=p.pdf_url,
-                        source=p.source,
-                        external_id=p.corpus_id,
-                        citation_count=p.citation_count,
-                        is_open_access=p.is_open_access,
-                    ))
-                await db.commit()
-            except Exception as persist_error:
-                await db.rollback()
-                logger.warning(
-                    "Long-tail paper persistence failed",
-                    extra={"run_id": run_id, "error": str(persist_error)},
-                )
 
         except Exception as e:
             if search_run is not None:

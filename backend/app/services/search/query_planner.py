@@ -323,10 +323,17 @@ class QueryPlanner:
                 rationale=self._generate_rationale(source, intent),
             ))
 
+        strategy = self._generate_strategy(intent, sources)
+        if any(
+            re.search(r"[\u4e00-\u9fff]", self._translate_to_english(keyword))
+            for keyword in keywords
+        ):
+            strategy += "；部分主题词未翻译，已保留原文，跨语言召回可能有限"
+
         return QueryParseResult(
             original_query=query,
             sub_queries=sub_queries,
-            strategy=self._generate_strategy(intent, sources),
+            strategy=strategy,
             intent=intent,
             keywords=keywords,
             constraints=constraints,
@@ -517,8 +524,8 @@ class QueryPlanner:
                 result.append(candidate)
         return result[:2]
 
-    @staticmethod
-    def _extract_keywords_rule(query: str) -> List[str]:
+    @classmethod
+    def _extract_keywords_rule(cls, query: str) -> List[str]:
         """基于规则提取关键词，支持中英文混合查询"""
         import re
 
@@ -543,7 +550,7 @@ class QueryPlanner:
             "et", "al",
         }
 
-        # 中文停用词（常见虚词和功能词）
+        # 只过滤独立片段；不能用单字“大、中、数”等切碎未知领域名称。
         zh_stop_words = {
             "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都",
             "一", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
@@ -554,6 +561,8 @@ class QueryPlanner:
             "个", "种", "类", "样", "第", "每", "某", "该", "此",
             "其", "之", "所", "者", "里", "后", "前", "内", "外",
             "两", "实验", "对比", "方法", "有",
+            "基于", "关于", "用于", "使用", "研究", "论文", "文献",
+            "中的", "中的使用", "方面", "查找", "寻找", "请", "帮我",
         }
 
         keywords = []
@@ -567,35 +576,14 @@ class QueryPlanner:
                 seen.add(lower)
                 keywords.append(token)
 
-        # 提取中文关键词：滑动窗口 + 停用词过滤
-        # 先移除英文部分，保留中文
+        # 最长术语优先，保留词典外主题原文，不用通用 data/model 替代它。
         zh_text = re.sub(r"[a-zA-Z0-9\-\.]+", " ", query)
-        # 按标点和空格分割
-        zh_segments = re.split(r"[，。、；：？！\s,;.!?]+", zh_text)
-
-        for segment in zh_segments:
-            if not segment or len(segment) < 2:
-                continue
-            # 用停用词分割这个片段
-            escaped = [re.escape(sw) for sw in sorted(zh_stop_words, key=len, reverse=True)]
-            pattern = "|".join(escaped)
-            parts = re.split(f"({pattern})", segment) if pattern else [segment]
-            for part in parts:
-                part = part.strip()
-                if not part or part in zh_stop_words:
-                    continue
-                if len(part) >= 2 and part not in seen:
-                    # 对过长的片段（>6字）做滑动窗口拆分，提取4字子串
-                    if len(part) > 6:
-                        for win in [4, 3]:
-                            for i in range(0, len(part) - win + 1):
-                                sub = part[i:i + win]
-                                if sub not in seen and sub not in zh_stop_words and len(sub) >= 2:
-                                    seen.add(sub)
-                                    keywords.append(sub)
-                    else:
-                        seen.add(part)
-                        keywords.append(part)
+        terms = "|".join(re.escape(term) for term in sorted(cls._ZH_EN_MAP, key=len, reverse=True))
+        for segment in re.findall(r"[\u4e00-\u9fff]+", zh_text):
+            for part in re.split(f"({terms})", segment):
+                if len(part) >= 2 and part not in seen and part not in zh_stop_words:
+                    seen.add(part)
+                    keywords.append(part)
 
         return keywords
 
@@ -676,29 +664,28 @@ class QueryPlanner:
         "引文网络": "citation network", "相关性": "relevance",
         "交通流预测": "traffic flow prediction", "交通预测": "traffic prediction",
         "时序预测": "time series forecasting", "轨迹预测": "trajectory prediction",
+        "交通流": "traffic flow", "时间序列": "time series", "时序": "time series",
+        "数据修复": "data imputation", "图像修复": "image restoration",
+        "缺失值": "missing values", "数据补全": "data completion",
+        "图像": "image", "传感器": "sensor", "预测": "prediction",
+        "修复": "repair", "插补": "imputation", "填补": "imputation",
+        "缺失": "missing", "分类": "classification", "检测": "detection",
     }
 
     @classmethod
     def _translate_to_english(cls, query: str) -> str:
-        """将中文查询转为英文关键词"""
+        """Translate known phrases without silently discarding unknown subjects."""
         import re
         # 检测是否有中文字符
         has_cjk = any('一' <= c <= '鿿' for c in query)
         if not has_cjk:
             return query
 
-        # 替换已知术语
-        result = query
-        for zh, en in cls._ZH_EN_MAP.items():
-            result = result.replace(zh, en)
-
-        # 如果替换后还有中文，提取英文部分
-        en_tokens = re.findall(r'[a-zA-Z][a-zA-Z0-9\-]+', result)
-        if en_tokens:
-            return " ".join(en_tokens)
-
-        # 如果全是中文且无法翻译，返回原文（让 Crossref 尝试）
-        return query
+        # One pass avoids replacing 神经网络 before 图神经网络, and spaces
+        # prevent adjacent replacements from becoming "flowdatarepair".
+        terms = "|".join(re.escape(term) for term in sorted(cls._ZH_EN_MAP, key=len, reverse=True))
+        result = re.sub(terms, lambda match: f" {cls._ZH_EN_MAP[match.group()]} ", query)
+        return " ".join(result.split())
 
     @classmethod
     def resolve_paper_alias(cls, query: str) -> str:

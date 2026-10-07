@@ -16,6 +16,7 @@ from typing import List, Optional
 import httpx
 
 from app.schemas.paper import Paper
+from app.core.tls import load_ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,8 @@ class BaseSource(ABC):
         self.max_retries = max_retries
         self.base_delay = base_delay
         self._client: Optional[httpx.AsyncClient] = None
+        self._client_lock = asyncio.Lock()
+        self._client_generation = 0
         self.last_error: Optional[str] = None
 
     # ------------------------------------------------------------------
@@ -87,15 +90,25 @@ class BaseSource(ABC):
     # ------------------------------------------------------------------
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """获取或创建 HTTP 客户端（惰性初始化）"""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url or self.base_api_url,
-                timeout=self.timeout,
-                headers=self._get_headers(),
-                follow_redirects=True,
-            )
-        return self._client
+        """One client per source; trust-store I/O must not delay async deadlines."""
+        generation = self._client_generation
+        async with asyncio.timeout(self.timeout), self._client_lock:
+            if generation != self._client_generation:
+                raise RuntimeError("Source closed during connection initialization")
+            if self._client is None or self._client.is_closed:
+                # Native certificate loading may outlive a cancelled waiter, but
+                # no HTTP client is constructed by the worker or after cancellation.
+                context = await load_ssl_context()
+                if generation != self._client_generation:
+                    raise RuntimeError("Source closed during connection initialization")
+                self._client = httpx.AsyncClient(
+                    base_url=self.base_url or self.base_api_url,
+                    timeout=self.timeout,
+                    headers=self._get_headers(),
+                    follow_redirects=True,
+                    verify=context,
+                )
+            return self._client
 
     def _get_headers(self) -> dict:
         """获取默认请求头"""
@@ -132,9 +145,19 @@ class BaseSource(ABC):
             httpx.HTTPStatusError: 非 429 的 HTTP 错误
             httpx.RequestError: 网络错误
         """
-        client = await self._get_client()
-        last_exc: Optional[Exception] = None
         self.last_error = None
+        try:
+            client = await self._get_client()
+        except Exception as exc:
+            # Adapters may return [] on failure. Preserve an honest source status
+            # even when the request failed before reaching the HTTP transport.
+            self.last_error = (
+                "Secure connection initialization timeout"
+                if isinstance(exc, TimeoutError)
+                else "Secure connection initialization failed"
+            )
+            raise
+        last_exc: Optional[Exception] = None
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -275,9 +298,12 @@ class BaseSource(ABC):
 
     async def close(self):
         """关闭 HTTP 客户端"""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        # Invalidate pending initialization without waiting for native TLS work.
+        # A later explicit request can still reopen this reusable source.
+        self._client_generation += 1
+        client, self._client = self._client, None
+        if client and not client.is_closed:
+            await client.aclose()
 
     async def __aenter__(self):
         return self

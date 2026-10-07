@@ -433,7 +433,7 @@ export default function Search() {
             {/* 搜索结果 */}
             {searchRun && (!isLoading || searchRun.results.length > 0) && (
               <div className="mt-4">
-                <ResultsList papers={searchRun.results} selectedPaperId={selectedPaper?.id} onPaperClick={handlePaperClick} />
+                <ResultsList key={renderedGeneration} papers={searchRun.results} selectedPaperId={selectedPaper?.id} onPaperClick={handlePaperClick} />
               </div>
             )}
 
@@ -509,6 +509,7 @@ export default function Search() {
               onKeyDown={handleResizeKeyDown}
             />
             <PaperDetailPanel
+              onSelectPaper={handlePaperClick}
               key={selectedPaper.id}
               paper={selectedPaper} analysis={analysis} analysisLoading={analysisLoading}
               evidenceSpans={evidenceSpans} evidenceLoading={evidenceLoading}

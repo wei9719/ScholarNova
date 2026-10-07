@@ -4,6 +4,7 @@ import clsx from 'clsx'
 import type { Paper } from '@/api/types'
 import { papersApi } from '@/api/client'
 import { useLocaleStore } from '@/stores/localeStore'
+import { getAbstractText } from '@/utils/abstract'
 import toast from 'react-hot-toast'
 import './ResultsList.css'
 
@@ -39,6 +40,7 @@ interface PaperCardProps {
 export default function PaperCard({ paper, isSelected = false, onClick, autoEnrich = false }: PaperCardProps) {
   const { locale } = useLocaleStore()
   const isZh = locale === 'zh'
+  const abstractText = getAbstractText(paper.abstract)
   const [translatedTitle, setTranslatedTitle] = useState('')
   const [translationLoading, setTranslationLoading] = useState(false)
   const [quality, setQuality] = useState(paper.quality)
@@ -141,9 +143,9 @@ export default function PaperCard({ paper, isSelected = false, onClick, autoEnri
       </div>
 
       {/* Abstract */}
-      {paper.abstract && (
-        <p className="paper-card-abstract">{paper.abstract}</p>
-      )}
+      <p className={clsx('paper-card-abstract', !abstractText && 'italic')}>
+        {abstractText || (isZh ? '暂无摘要（数据源未提供）' : 'No abstract provided by the source')}
+      </p>
 
       {quality && (
         <div className="paper-quality-strip" title={isZh
@@ -218,9 +220,11 @@ export default function PaperCard({ paper, isSelected = false, onClick, autoEnri
 
         {/* 相关度 */}
         {paper.relevance_score != null && (
-          <div className="flex items-center gap-1.5" title={isZh ? '与查询的相关度' : 'Relevance to query'}>
+          <div className="flex items-center gap-1.5" title={isZh
+            ? '与查询的启发式匹配分，仅供排序参考，不是相关概率或质量认证'
+            : 'Heuristic match score for ranking, not a probability or quality certification'}>
             <span className="text-[10px] text-gray-400 dark:text-gray-500">
-              {isZh ? '相关度' : 'Relevance'}
+              {isZh ? '匹配分' : 'Match score'}
             </span>
             <div className="w-16 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
               <div
@@ -229,7 +233,7 @@ export default function PaperCard({ paper, isSelected = false, onClick, autoEnri
               />
             </div>
             <span className="text-xs font-medium text-primary-600 dark:text-primary-400">
-              {Math.round(paper.relevance_score * 100)}%
+              {Math.round(paper.relevance_score * 100)}/100
             </span>
           </div>
         )}

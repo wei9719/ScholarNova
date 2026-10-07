@@ -5,13 +5,19 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.core.capacity import CapacityExceeded, busy_response
+from app.models.paper import PaperEntity
 from app.models.recommendation import Recommendation, RecommendationFeedback
 from app.schemas.paper import Paper
+from app.schemas.similar_papers import SimilarPapersRequest, SimilarPapersResponse
+from app.services.similar_papers import recommend_similar
+from app.services.paper_persistence import persist_papers
 from app.schemas.search import (
     RecommendationFeedback as RecommendationFeedbackSchema,
     RecommendationItem,
@@ -21,6 +27,48 @@ from app.schemas.search import (
 )
 
 router = APIRouter()
+
+
+def _paper_snapshot(paper: PaperEntity) -> Paper:
+    return Paper(
+        id=paper.id, title=paper.title, abstract=paper.abstract, authors=paper.author_names,
+        year=paper.year, venue=paper.venue, doi=paper.doi, url=paper.url,
+        pdf_url=paper.pdf_url, source=paper.source, citation_count=paper.citation_count,
+        is_open_access=paper.is_open_access,
+    )
+
+
+async def _persist_similar(db: AsyncSession, response: SimilarPapersResponse) -> None:
+    # Only expose actionable IDs: paper detail, PDF analysis and knowledge-save use this table.
+    papers = await persist_papers(db, [item.paper for item in response.items])
+    await db.commit()
+    for item, paper in zip(response.items, papers):
+        item.paper = paper
+
+
+@router.post("/similar", response_model=SimilarPapersResponse)
+async def get_similar_papers(
+    request: SimilarPapersRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> SimilarPapersResponse:
+    try:
+        async with http_request.app.state.search_capacity.reserve():
+            entity = (await db.execute(select(PaperEntity).where(PaperEntity.id == request.paper_id))).scalar_one_or_none()
+            if entity is None:
+                raise HTTPException(status_code=404, detail="种子论文不存在，请重新打开搜索结果。")
+            seed, keywords = _paper_snapshot(entity), list(entity.keywords or [])
+            # Do not hold a SQLite read/write transaction while waiting for external sources.
+            await db.commit()
+            response = await recommend_similar(seed, request.mode, request.limit, keywords=keywords)
+            try:
+                await _persist_similar(db, response)
+            except SQLAlchemyError:
+                await db.rollback()
+                raise HTTPException(status_code=503, detail="候选论文暂未能保存，请稍后重试。") from None
+            return response
+    except CapacityExceeded:
+        return busy_response()
 
 
 @router.post("", response_model=RecommendationResponse)

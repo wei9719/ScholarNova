@@ -14,6 +14,7 @@ import logging
 import re
 import time
 import xml.etree.ElementTree as ET
+from datetime import date
 from typing import List, Optional
 
 from app.schemas.paper import Paper
@@ -87,7 +88,10 @@ class ArxivSource(BaseSource):
     # 搜索
     # ------------------------------------------------------------------
 
-    async def search(self, query: str, max_results: int = 50) -> List[Paper]:
+    async def search(
+        self, query: str, max_results: int = 50, *,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> List[Paper]:
         """
         搜索论文
 
@@ -105,6 +109,11 @@ class ArxivSource(BaseSource):
             "sortBy": "relevance",
             "sortOrder": "descending",
         }
+        if date_from or date_to:
+            # arXiv's date range is first-submission time (GMT), not journal publication.
+            start = (date_from or "1991-01-01").replace("-", "") + "0000"
+            end = (date_to or date.today().isoformat()).replace("-", "") + "2359"
+            params["search_query"] = f"(all:{query}) AND submittedDate:[{start} TO {end}]"
 
         try:
             response = await self._request_with_arxiv_limit("/query", params=params)
@@ -263,10 +272,15 @@ class ArxivSource(BaseSource):
             # 发表年份
             published_elem = entry.find("atom:published", _NS)
             year = None
+            publication_date = None
             if published_elem is not None and published_elem.text:
                 match = re.match(r"(\d{4})", published_elem.text)
                 if match:
                     year = int(match.group(1))
+                try:
+                    publication_date = date.fromisoformat(published_elem.text[:10])
+                except ValueError:
+                    pass
 
             # PDF 链接
             pdf_url = None
@@ -294,6 +308,7 @@ class ArxivSource(BaseSource):
                 authors=authors,
                 abstract=abstract,
                 year=year,
+                publication_date=publication_date,
                 venue="arXiv",
                 citation_count=0,  # arXiv 不提供引用数
                 doi=doi,

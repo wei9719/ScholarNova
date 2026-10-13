@@ -11,6 +11,7 @@ API 文档: https://docs.openalex.org/
 """
 
 import logging
+from datetime import date
 from typing import List, Optional
 
 from app.schemas.paper import Paper
@@ -58,7 +59,10 @@ class OpenAlexSource(BaseSource):
     # 搜索
     # ------------------------------------------------------------------
 
-    async def search(self, query: str, max_results: int = 50) -> List[Paper]:
+    async def search(
+        self, query: str, max_results: int = 50, *,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> List[Paper]:
         """
         搜索论文
 
@@ -74,6 +78,13 @@ class OpenAlexSource(BaseSource):
             "per_page": min(max_results, 200),
             **self._get_polite_params(),
         }
+        filters = []
+        if date_from:
+            filters.append(f"from_publication_date:{date_from}")
+        if date_to:
+            filters.append(f"to_publication_date:{date_to}")
+        if filters:
+            params["filter"] = ",".join(filters)
 
         try:
             response = await self._request_with_retry("GET", "/works", params=params)
@@ -204,6 +215,12 @@ class OpenAlexSource(BaseSource):
             year = data.get("publication_year")
             if year is not None:
                 year = int(year)
+            publication_date = None
+            try:
+                if data.get("publication_date"):
+                    publication_date = date.fromisoformat(data["publication_date"])
+            except (ValueError, TypeError):
+                pass  # Keep usable year metadata without inventing a specific day.
 
             # 期刊/会议
             venue = None
@@ -222,6 +239,7 @@ class OpenAlexSource(BaseSource):
                 authors=authors,
                 abstract=abstract,
                 year=year,
+                publication_date=publication_date,
                 venue=venue,
                 citation_count=data.get("cited_by_count", 0),
                 doi=doi,

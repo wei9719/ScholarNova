@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -53,6 +54,7 @@ class LocalLibrarySource(BaseSource):
             authors=entity.author_names,
             abstract=entity.abstract,
             year=entity.year,
+            publication_date=entity.publication_date,
             venue=entity.venue,
             citation_count=entity.citation_count,
             doi=entity.doi,
@@ -63,7 +65,10 @@ class LocalLibrarySource(BaseSource):
             is_open_access=entity.is_open_access,
         )
 
-    async def search(self, query: str, max_results: int = 50) -> list[Paper]:
+    async def search(
+        self, query: str, max_results: int = 50, *,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> list[Paper]:
         terms = self._terms(query)
         if not terms:
             return []
@@ -80,10 +85,22 @@ class LocalLibrarySource(BaseSource):
             )
 
         candidate_limit = min(max(max_results * 10, 100), 1000)
+        statement = select(PaperEntity).where(or_(*filters))
+        if date_from:
+            start = date.fromisoformat(date_from)
+            statement = statement.where(or_(
+                PaperEntity.publication_date >= start,
+                (PaperEntity.publication_date.is_(None)) & (PaperEntity.year >= start.year),
+            ))
+        if date_to:
+            end = date.fromisoformat(date_to)
+            statement = statement.where(or_(
+                PaperEntity.publication_date <= end,
+                (PaperEntity.publication_date.is_(None)) & (PaperEntity.year <= end.year),
+            ))
         async with self._session_factory() as db:
             result = await db.execute(
-                select(PaperEntity)
-                .where(or_(*filters))
+                statement
                 .order_by(PaperEntity.updated_at.desc())
                 .limit(candidate_limit)
             )

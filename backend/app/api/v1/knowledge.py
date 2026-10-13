@@ -4,20 +4,23 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select, func
+from pydantic import ValidationError
+from sqlalchemy import String, cast, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.knowledge import KnowledgeBase, ResearchRoute
+from app.models.paper import PaperEntity
 from app.services.features.knowledge import (
     delete_knowledge_features,
     rebuild_knowledge_features,
 )
+from app.services.features.reading_notes import render_reading_note
 from app.services.diagram.architecture_judge import judge_architecture
 from app.services.inference import AllModelsUnavailableError, chat_with_fallback
 from app.schemas.knowledge import (
@@ -34,11 +37,23 @@ from app.schemas.knowledge import (
     RouteListResponse,
     RouteResponse,
     RouteUpdate,
+    validate_reading_note_data,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _utc_naive(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+async def _validate_reading_source(db: AsyncSession, source_id: str | None) -> None:
+    if source_id and (await db.execute(
+        select(PaperEntity.id).where(PaperEntity.id == source_id)
+    )).scalar_one_or_none() is None:
+        raise HTTPException(status_code=422, detail="来源论文不存在；请重新选择论文，或清空来源后保存手写笔记。")
 
 
 async def _analysis_knowledge_snapshot(db: AsyncSession, knowledge_ids: list[str]) -> list:
@@ -119,6 +134,9 @@ async def create_knowledge(
     创建知识条目（可选 AI 润色）
     """
     content = request.content
+    if request.card_type == "reading_note":
+        await _validate_reading_source(db, request.source_paper_id)
+        content = render_reading_note(request.card_data)
     research_points = list(request.research_points)
     tags = list(request.tags)
     polish_status = "skipped"
@@ -128,7 +146,7 @@ async def create_knowledge(
     polish_fallback = False
 
     # AI 润色：精炼内容、提取研究点、生成标签
-    if request.auto_polish and request.content:
+    if request.auto_polish and request.content and request.card_type != "reading_note":
         try:
             polish_prompt = f"""请对以下学术笔记进行润色和结构化提取：
 
@@ -180,6 +198,7 @@ async def create_knowledge(
             model_completed = False
             polish_status = "model_unavailable"  # LLM 失败就用原内容
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     knowledge = KnowledgeBase(
         title=request.title,
         category=request.category,
@@ -192,6 +211,8 @@ async def create_knowledge(
         notes=request.notes,
         card_type=request.card_type,
         card_data=request.card_data,
+        created_at=now,
+        updated_at=now,
     )
     db.add(knowledge)
     await db.flush()
@@ -210,6 +231,8 @@ async def create_knowledge(
         research_points=knowledge.research_points or [],
         tags=knowledge.tags or [],
         notes=knowledge.notes,
+        card_type=knowledge.card_type,
+        card_data=knowledge.card_data,
         created_at=knowledge.created_at,
         updated_at=knowledge.updated_at,
         polish_status=polish_status,
@@ -226,6 +249,8 @@ async def create_knowledge(
 @router.get("", response_model=KnowledgeListResponse)
 async def list_knowledge(
     category: Optional[str] = Query(None, description="按分类筛选"),
+    card_type: Optional[str] = Query(None, max_length=50, description="按卡片类型筛选"),
+    source_paper_id: Optional[str] = Query(None, description="按来源论文 ID 精确筛选"),
     keyword: Optional[str] = Query(None, description="按关键词搜索"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
@@ -241,11 +266,16 @@ async def list_knowledge(
 
     if category:
         query = query.where(KnowledgeBase.category == category)
+    if card_type is not None:
+        query = query.where(KnowledgeBase.card_type == card_type)
+    if source_paper_id is not None:
+        query = query.where(KnowledgeBase.source_paper_id == source_paper_id)
 
     if keyword:
         query = query.where(
             KnowledgeBase.title.contains(keyword)
             | KnowledgeBase.content.contains(keyword)
+            | KnowledgeBase.notes.contains(keyword)
         )
 
     # 获取总数
@@ -269,6 +299,8 @@ async def list_knowledge(
         )
         .group_by(KnowledgeBase.category)
     )
+    if card_type is not None:
+        category_query = category_query.where(KnowledgeBase.card_type == card_type)
     category_result = await db.execute(category_query)
     categories = [
         CategoryCount(name=row[0], count=row[1])
@@ -288,6 +320,8 @@ async def list_knowledge(
                 research_points=k.research_points or [],
                 tags=k.tags or [],
                 notes=k.notes,
+                card_type=k.card_type,
+                card_data=k.card_data,
                 created_at=k.created_at,
                 updated_at=k.updated_at,
             )
@@ -300,6 +334,7 @@ async def list_knowledge(
 
 @router.get("/categories")
 async def get_categories(
+    card_type: Optional[str] = Query(None, max_length=50, description="按卡片类型统计分类"),
     db: AsyncSession = Depends(get_db),
 ) -> List[CategoryCount]:
     """
@@ -312,6 +347,8 @@ async def get_categories(
         )
         .group_by(KnowledgeBase.category)
     )
+    if card_type is not None:
+        category_query = category_query.where(KnowledgeBase.card_type == card_type)
     category_result = await db.execute(category_query)
     return [
         CategoryCount(name=row[0], count=row[1])
@@ -463,6 +500,8 @@ async def get_knowledge(
         research_points=knowledge.research_points or [],
         tags=knowledge.tags or [],
         notes=knowledge.notes,
+        card_type=knowledge.card_type,
+        card_data=knowledge.card_data,
         created_at=knowledge.created_at,
         updated_at=knowledge.updated_at,
     )
@@ -485,25 +524,48 @@ async def update_knowledge(
     if not knowledge:
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
-    # 更新字段
-    if request.title is not None:
-        knowledge.title = request.title
-    if request.category is not None:
-        knowledge.category = request.category
-    if request.content is not None:
-        knowledge.content = request.content
-    if request.source_paper_id is not None:
-        knowledge.source_paper_id = request.source_paper_id
-    if request.source_paper_title is not None:
-        knowledge.source_paper_title = request.source_paper_title
-    if request.source_paper_doi is not None:
-        knowledge.source_paper_doi = request.source_paper_doi
-    if request.research_points is not None:
-        knowledge.research_points = request.research_points
-    if request.tags is not None:
-        knowledge.tags = request.tags
-    if request.notes is not None:
-        knowledge.notes = request.notes
+    previous_updated_at = _utc_naive(knowledge.updated_at)
+    if request.expected_updated_at is not None and _utc_naive(request.expected_updated_at) != previous_updated_at:
+        raise HTTPException(status_code=409, detail="条目已被其他编辑更新，请重新读取后再保存；本次未覆盖内容。")
+
+    changes = request.model_dump(exclude_unset=True, exclude={"expected_updated_at"})
+    # Required legacy fields retain their previous values when passed null.
+    for field in ("title", "category", "content", "research_points", "tags"):
+        if changes.get(field, ...) is None:
+            changes.pop(field)
+    next_type = changes.get("card_type", knowledge.card_type)
+    if next_type == "reading_note":
+        try:
+            data = validate_reading_note_data(changes.get("card_data", knowledge.card_data))
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors(include_context=False, include_input=False)) from exc
+        source_id = changes.get("source_paper_id", knowledge.source_paper_id)
+        if knowledge.card_type != "reading_note" or source_id != knowledge.source_paper_id:
+            await _validate_reading_source(db, source_id)
+        changes["card_data"] = data
+        changes["content"] = render_reading_note(data)
+    elif knowledge.card_type == "reading_note" and "card_type" in changes and "card_data" not in changes:
+        # Converting to a plain concept/skill retains the labelled text, not a
+        # hidden reading-note payload that could later override new content.
+        changes["card_data"] = None
+
+    changes["updated_at"] = max(
+        datetime.now(timezone.utc).replace(tzinfo=None),
+        previous_updated_at + timedelta(microseconds=1),
+    )
+    statement = update(KnowledgeBase).where(KnowledgeBase.id == kid)
+    if request.expected_updated_at is not None:
+        timestamp_matches = KnowledgeBase.updated_at == knowledge.updated_at
+        if not previous_updated_at.microsecond:
+            # Old SQLite server defaults have no fractional suffix. A regular
+            # DateTime bind includes .000000, so also match that exact old form.
+            timestamp_matches |= cast(KnowledgeBase.updated_at, String) == str(previous_updated_at)
+        statement = statement.where(timestamp_matches)
+    result = await db.execute(statement.values(**changes).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="条目已被其他编辑更新，请重新读取后再保存；本次未覆盖内容。")
+    await db.refresh(knowledge)
 
     await rebuild_knowledge_features(db, knowledge)
     await db.commit()
@@ -520,6 +582,8 @@ async def update_knowledge(
         research_points=knowledge.research_points or [],
         tags=knowledge.tags or [],
         notes=knowledge.notes,
+        card_type=knowledge.card_type,
+        card_data=knowledge.card_data,
         created_at=knowledge.created_at,
         updated_at=knowledge.updated_at,
     )

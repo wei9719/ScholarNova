@@ -22,6 +22,7 @@
 import json
 import logging
 import re
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from app.schemas.paper import Paper
@@ -177,6 +178,27 @@ class ConstraintVerifier:
         Returns:
             验证结果，不适用时返回 None
         """
+        if key == "publication_date":
+            # Missing day precision is a metadata limitation, not a reason to
+            # ask a language model to manufacture a publication date.
+            try:
+                boundary = date.fromisoformat(str(value))
+                observed = paper.publication_date
+                checks = {
+                    "gte": observed is not None and observed >= boundary,
+                    "lte": observed is not None and observed <= boundary,
+                    "eq": observed is not None and observed == boundary,
+                }
+                verdict = ("satisfied" if checks[operator] else "violated") if observed and operator in checks else "unknown"
+            except (TypeError, ValueError):
+                verdict = "unknown"
+            return self._make_result(
+                constraint_key=key, claim=f"Publication date {operator} {value}",
+                verdict=verdict, source_level="metadata",
+                evidence_text=f"Publication date: {paper.publication_date}; year: {paper.year}",
+                confidence=0.99 if verdict != "unknown" else 0.0,
+            )
+
         if key == "year":
             if paper.year is None:
                 return self._make_result(

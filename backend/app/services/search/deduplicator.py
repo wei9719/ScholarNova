@@ -193,6 +193,7 @@ class Deduplicator:
         # 如果主论文没有 PDF，尝试从重复论文获取
         if not pdf_url and duplicate.pdf_url:
             pdf_url = duplicate.pdf_url
+        publication_date = primary.publication_date or duplicate.publication_date
 
         # 保留 primary 的 id，但更新其他字段
         return Paper(
@@ -200,7 +201,8 @@ class Deduplicator:
             title=primary.title,
             authors=merged_authors,
             abstract=abstract,
-            year=primary.year or duplicate.year,
+            year=publication_date.year if publication_date else primary.year or duplicate.year,
+            publication_date=publication_date,
             venue=primary.venue or duplicate.venue,
             citation_count=citation_count,
             doi=primary.doi or duplicate.doi,

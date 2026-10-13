@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -188,13 +189,13 @@ def _collect_constraints(request: SearchRequest):
     constraints = list(request.constraints)
     if request.date_from:
         constraints.append(Constraint(
-            key="year", operator="gte", value=int(request.date_from[:4]),
-            description=f"Published after {request.date_from}",
+            key="publication_date", operator="gte", value=request.date_from,
+            description=f"Publication date >= {request.date_from}; year-only metadata is approximate",
         ))
     if request.date_to:
         constraints.append(Constraint(
-            key="year", operator="lte", value=int(request.date_to[:4]),
-            description=f"Published before {request.date_to}",
+            key="publication_date", operator="lte", value=request.date_to,
+            description=f"Publication date <= {request.date_to}; year-only metadata is approximate",
         ))
     if request.min_citations is not None:
         constraints.append(Constraint(
@@ -259,7 +260,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
     from app.services.search.deduplicator import Deduplicator
     from app.services.search.query_planner import QueryPlanner
     from app.services.search.ranker import Ranker
-    from app.services.search.retriever import Retriever, SourceStatus
+    from app.services.search.retriever import Retriever, SourceStatus, publication_bounds
     from app.services.sources.arxiv import ArxivSource
     from app.services.sources.crossref import CrossRefSource
     from app.services.sources.local_library import LocalLibrarySource
@@ -267,6 +268,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
     from app.services.sources.semantic_scholar import SemanticScholarSource
 
     start_time = time.time()
+    searched_at = datetime.now(timezone.utc).isoformat()
 
     async with async_session_factory() as db:
         search_run: SearchRun | None = None
@@ -302,6 +304,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 planning_mode=request.planning_mode,
             )
             search_run.query_plan = query_plan.model_dump()
+            date_filters = publication_bounds(query_plan.constraints)
             planned_calls = [
                 _source_call(
                     sub_query.source,
@@ -326,6 +329,8 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 "total_papers": 0,
                 "deduplicated_papers": 0,
                 "current_phase": "searching",
+                "searched_at": searched_at,
+                "publication_window": date_filters,
                 "search_rounds": 0,
                 "api_calls": 0,
                 "latency_ms": (time.time() - start_time) * 1000,
@@ -388,6 +393,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 sub_queries=query_plan.sub_queries,
                 max_results=request.max_results,
                 progress_callback=report_source_progress,
+                **date_filters,
             )
             papers = list(retrieve_result.papers)
             all_statuses = list(retrieve_result.source_statuses)
@@ -441,6 +447,7 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                         sub_queries=refinement_queries,
                         max_results=min(request.max_results, 25),
                         progress_callback=report_source_progress,
+                        **date_filters,
                     )
                     papers.extend(refined_result.papers)
                     all_statuses.extend(refined_result.source_statuses)
@@ -801,6 +808,15 @@ async def get_search_run(
         if isinstance(source_status, dict) else progress.get("search_rounds", 0),
         "latency_ms": round(search_run.latency_ms or progress.get("latency_ms", 0), 2),
         "token_usage": search_run.token_usage or {},
+        "searched_at": progress.get("searched_at"),
+        "date_from": (progress.get("publication_window") or {}).get("date_from"),
+        "date_to": (progress.get("publication_window") or {}).get("date_to"),
+        "year_only_count": sum(p.publication_date is None and p.year is not None for p in papers),
+        "freshness_note": (
+            "指定时间范围时会在学术数据源端筛选；检索时间不等于数据库更新时间，收录可能滞后，不能保证当日完整。"
+            "只有年份的记录按年近似筛选；arXiv日期为首次预印本提交日。"
+            "Semantic Scholar相同查询可能使用最长24小时缓存。"
+        ),
         "successful_calls": sum(
             1 for item in source_calls
             if item.get("source") != "retrieval_limit" and item.get("success")

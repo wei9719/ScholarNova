@@ -12,6 +12,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from app.schemas.paper import Paper
@@ -24,6 +25,37 @@ _SOURCE_FAILURE_COUNTS: dict[str, int] = {}
 _SOURCE_CIRCUIT_UNTIL: dict[str, float] = {}
 _SOURCE_CIRCUIT_SECONDS = 60.0
 MAX_SOURCE_REQUESTS = 12
+
+
+def publication_bounds(constraints: list) -> dict[str, str]:
+    """Push the intersection of explicit dates and planned year limits upstream."""
+    starts, ends = [], []
+    for constraint in constraints:
+        values = constraint.model_dump() if hasattr(constraint, "model_dump") else constraint
+        key, op, value = values.get("key"), values.get("operator"), values.get("value")
+        try:
+            if key == "publication_date":
+                value = date.fromisoformat(str(value)).isoformat()
+                if op in ("gte", "eq"):
+                    starts.append(value)
+                if op in ("lte", "eq"):
+                    ends.append(value)
+            elif key == "year":
+                year = int(value)
+                if op in ("gte", "eq"):
+                    starts.append(date(year, 1, 1).isoformat())
+                if op in ("lte", "eq"):
+                    ends.append(date(year, 12, 31).isoformat())
+        except (ValueError, TypeError):
+            continue  # Invalid model constraints remain subject to final local validation.
+    bounds = {}
+    if starts:
+        bounds["date_from"] = max(starts)
+    if ends:
+        bounds["date_to"] = min(ends)
+    if starts and ends and bounds["date_from"] > bounds["date_to"]:
+        raise ValueError("查询中的发表日期条件互相冲突，请调整时间范围")
+    return bounds
 
 
 @dataclass
@@ -88,6 +120,7 @@ class Retriever:
         progress_callback: Optional[
             Callable[[SourceStatus], Awaitable[None]]
         ] = None,
+        *, date_from: str | None = None, date_to: str | None = None,
     ) -> RetrieveResult:
         """
         执行检索
@@ -122,7 +155,9 @@ class Retriever:
                     truncated_count += 1
                     continue
                 tasks.append(asyncio.create_task(
-                    self._retrieve_from_source(source, sq.query, max_results)
+                    self._retrieve_from_source(
+                        source, sq.query, max_results, date_from=date_from, date_to=date_to,
+                    )
                 ))
             else:
                 logger.warning(f"未找到数据源适配器: {sq.source}, 可用: {list(self.sources.keys())}")
@@ -186,6 +221,7 @@ class Retriever:
         source: BaseSource,
         query: str,
         max_results: int,
+        *, date_from: str | None = None, date_to: str | None = None,
     ) -> tuple[List[Paper], SourceStatus]:
         """
         从单个数据源检索
@@ -212,8 +248,13 @@ class Retriever:
             )
 
         try:
+            date_filters = {}
+            if date_from:
+                date_filters["date_from"] = date_from
+            if date_to:
+                date_filters["date_to"] = date_to
             papers = await asyncio.wait_for(
-                source.search(query, max_results),
+                source.search(query, max_results, **date_filters),
                 timeout=self._timeout,
             )
             elapsed = (time.monotonic() - start) * 1000

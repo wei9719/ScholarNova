@@ -5,14 +5,16 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useSearchStore } from '@/stores/searchStore'
 import Search from '../Search'
 
-const api = vi.hoisted(() => ({ create: vi.fn(), getRun: vi.fn(), get: vi.fn(), analyze: vi.fn() }))
+const api = vi.hoisted(() => ({ create: vi.fn(), getRun: vi.fn(), get: vi.fn(), analyze: vi.fn(), getCategories: vi.fn(), toastError: vi.fn() }))
 const uploadCallback = vi.hoisted(() => ({ current: () => {} }))
 const analyzeCallback = vi.hoisted(() => ({ current: () => {} }))
 vi.mock('@/api/client', () => ({
   searchApi: { create: api.create, getRun: api.getRun },
   papersApi: { get: api.get, analyze: api.analyze },
+  knowledgeApi: { getCategories: api.getCategories },
   networkApi: {},
 }))
+vi.mock('react-hot-toast', () => ({ default: { error: api.toastError } }))
 vi.mock('@/components/QueryPlan/QueryPlan', () => ({ default: () => null }))
 vi.mock('@/components/SearchInsights/SearchInsights', () => ({ default: () => null }))
 vi.mock('@/components/ResultsList/ResultsList', () => ({
@@ -41,9 +43,10 @@ beforeEach(() => {
   useSearchStore.getState().clearSearch()
   api.create.mockResolvedValue({ data: { run_id: 'run' } })
   api.getRun.mockResolvedValue({ data: { run_id: 'run', status: 'completed', results: [{ id: 'a' }], query: 'traffic' } })
+  api.getCategories.mockResolvedValue({ data: [] })
 })
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.useRealTimers() })
 
 it('sends automatic planning for an existing query URL without a mode', async () => {
   render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
@@ -328,4 +331,85 @@ it('cancels a pending analysis when leaving and ignores a late completion', asyn
   await act(async () => { finish({ data: { summary: '过期分析' } }) })
   expect(useSearchStore.getState().analysis).toBeNull()
   expect(useSearchStore.getState().analysisLoading).toBe(false)
+})
+
+function freezeCalendar() {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 9, 13, 15, 30))
+}
+
+it('sends local-calendar year-to-date bounds and can repeat the same dated search', async () => {
+  freezeCalendar()
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  await screen.findByText('Paper A')
+  fireEvent.change(screen.getByRole('combobox', { name: '发表时间' }), { target: { value: 'year' } })
+  expect(api.create).toHaveBeenCalledOnce()
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenNthCalledWith(2, {
+    query: 'traffic', planning_mode: 'auto', date_from: '2026-01-01', date_to: '2026-10-13',
+  })
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenNthCalledWith(3, {
+    query: 'traffic', planning_mode: 'auto', date_from: '2026-01-01', date_to: '2026-10-13',
+  })
+  fireEvent.change(screen.getByRole('combobox', { name: '发表时间' }), { target: { value: 'all' } })
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenNthCalledWith(4, { query: 'traffic', planning_mode: 'auto' })
+})
+
+it.each([
+  ['2024', '2025', '2024-01-01', '2025-12-31'],
+  ['2020', '2026', '2020-01-01', '2026-10-13'],
+])('sends custom year bounds %s–%s without pretending future days were searched', async (from, to, start, end) => {
+  freezeCalendar()
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  await screen.findByText('Paper A')
+  fireEvent.change(screen.getByRole('combobox', { name: '发表时间' }), { target: { value: 'custom' } })
+  fireEvent.change(screen.getByRole('spinbutton', { name: '开始年份' }), { target: { value: from } })
+  fireEvent.change(screen.getByRole('spinbutton', { name: '结束年份' }), { target: { value: to } })
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  await screen.findByText('Paper A')
+  expect(api.create).toHaveBeenLastCalledWith({ query: 'traffic', planning_mode: 'auto', date_from: start, date_to: end })
+})
+
+it('uses three calendar years through today and locks date controls during a request', async () => {
+  freezeCalendar()
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  await screen.findByText('Paper A')
+  fireEvent.change(screen.getByRole('combobox', { name: '发表时间' }), { target: { value: 'three' } })
+  let finish!: (value: unknown) => void
+  api.create.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  expect(api.create).toHaveBeenLastCalledWith({ query: 'traffic', planning_mode: 'auto', date_from: '2024-01-01', date_to: '2026-10-13' })
+  expect(screen.getByRole('combobox', { name: '发表时间' })).toBeDisabled()
+  await act(async () => finish({ data: { run_id: 'second' } }))
+  await screen.findByText('Paper A')
+  expect(screen.getByRole('combobox', { name: '发表时间' })).toBeEnabled()
+})
+
+it.each([
+  ['2026', '2025'], ['2020', '2027'], ['', '2026'], ['2020', ''], ['999', '2026'], ['2020.5', '2026'],
+])('rejects invalid year range %s–%s without clearing existing results or paper analysis', async (from, to) => {
+  freezeCalendar()
+  api.get.mockResolvedValue({ data: { id: 'a', title: 'Paper A' } })
+  api.analyze.mockResolvedValue({ data: { summary: '已有分析不得清空' } })
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  fireEvent.click(await screen.findByText('Paper A'))
+  await screen.findByTestId('detail')
+  fireEvent.click(screen.getByRole('button', { name: 'Analyze' }))
+  await screen.findByText('已有分析不得清空')
+  const previousRun = useSearchStore.getState().searchRun
+  fireEvent.change(screen.getByRole('combobox', { name: '发表时间' }), { target: { value: 'custom' } })
+  fireEvent.change(screen.getByRole('spinbutton', { name: '开始年份' }), { target: { value: from } })
+  fireEvent.change(screen.getByRole('spinbutton', { name: '结束年份' }), { target: { value: to } })
+  fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+  expect(api.toastError).toHaveBeenCalledOnce()
+  expect(api.create).toHaveBeenCalledOnce()
+  expect(useSearchStore.getState().searchRun).toBe(previousRun)
+  expect(screen.getByTestId('detail')).toHaveTextContent('a')
+  expect(screen.getByTestId('analysis')).toHaveTextContent('已有分析不得清空')
+  expect(useSearchStore.getState().isLoading).toBe(false)
 })

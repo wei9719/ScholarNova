@@ -7,7 +7,43 @@
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+ReadingSectionName = Literal[
+    "overview", "experiments", "resources", "math", "prerequisites",
+    "writing", "figures", "translation", "formatting",
+]
+
+
+class ReadingNoteSection(BaseModel):
+    """Separate source excerpts, model suggestions and the reader's own ideas."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    paper_notes: str = Field(default="", max_length=20_000)
+    ai_suggestions: str = Field(default="", max_length=20_000)
+    user_notes: str = Field(default="", max_length=20_000)
+
+
+class ReadingNoteData(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal[1]
+    status: Literal["to_read", "reading", "reproducing", "reviewed"]
+    source_query: str = Field(default="", max_length=2000)
+    sections: dict[ReadingSectionName, ReadingNoteSection] = Field(default_factory=dict)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_integer_version(cls, value):
+        if type(value) is not int:
+            raise ValueError("schema_version 必须为整数 1")
+        return value
+
+
+def validate_reading_note_data(data: dict | None) -> dict:
+    return ReadingNoteData.model_validate(data).model_dump()
 
 
 # ============================================================
@@ -26,8 +62,14 @@ class KnowledgeCreate(BaseModel):
     tags: List[str] = Field(default=[], description="标签列表")
     notes: Optional[str] = Field(None, description="用户备注")
     auto_polish: bool = Field(default=False, description="是否自动润色内容")
-    card_type: Optional[str] = Field(None, description="卡片类型: research_point/direction/architecture/paper")
+    card_type: Optional[str] = Field(None, max_length=50, description="卡片类型，兼容旧类型；新增 reading_note/foundation/skill")
     card_data: Optional[dict] = Field(None, description="结构化卡片数据")
+
+    @model_validator(mode="after")
+    def validate_reading_note(self):
+        if self.card_type == "reading_note":
+            self.card_data = validate_reading_note_data(self.card_data)
+        return self
 
 
 class KnowledgeUpdate(BaseModel):
@@ -41,6 +83,9 @@ class KnowledgeUpdate(BaseModel):
     research_points: Optional[List[str]] = Field(None, description="提取的研究点列表")
     tags: Optional[List[str]] = Field(None, description="标签列表")
     notes: Optional[str] = Field(None, description="用户备注")
+    card_type: Optional[str] = Field(None, max_length=50, description="卡片类型")
+    card_data: Optional[dict] = Field(None, description="结构化数据；阅读笔记不得清空")
+    expected_updated_at: Optional[datetime] = Field(None, description="编辑时读取的更新时间；不一致返回 409")
 
 
 class KnowledgeResponse(BaseModel):
@@ -55,6 +100,8 @@ class KnowledgeResponse(BaseModel):
     research_points: List[str] = []
     tags: List[str] = []
     notes: Optional[str] = None
+    card_type: Optional[str] = None
+    card_data: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
     polish_status: Optional[Literal["skipped", "completed", "invalid_response", "model_unavailable"]] = Field(None, description="仅本次创建请求的润色状态，非持久化字段")

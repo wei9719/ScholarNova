@@ -45,6 +45,7 @@ async def persist_papers(db: AsyncSession, papers: list[Paper]) -> list[Paper]:
                         id=str(paper.id), title=paper.title, abstract=paper.abstract,
                         authors=[{"name": name} for name in paper.authors],
                         year=paper.year, venue=paper.venue, doi=normalize_doi(paper.doi) or None,
+                        publication_date=paper.publication_date,
                         canonical_doi=normalize_doi(paper.doi) or None,
                         external_id=paper.corpus_id or None,
                         url=paper.url, pdf_url=paper.pdf_url, source=paper.source,
@@ -58,9 +59,12 @@ async def persist_papers(db: AsyncSession, papers: list[Paper]) -> list[Paper]:
                     raise
         if existing is not None:
             paper = paper.model_copy(update={"id": existing.id})
-            for field in ("abstract", "venue", "url", "pdf_url"):
+            for field in ("abstract", "venue", "url", "pdf_url", "year"):
                 if not getattr(existing, field) and getattr(paper, field):
                     setattr(existing, field, getattr(paper, field))
+            if existing.publication_date is None and paper.publication_date is not None:
+                existing.publication_date = paper.publication_date
+                existing.year = paper.publication_date.year
         resolved.append(paper)
     await db.flush()
     return resolved

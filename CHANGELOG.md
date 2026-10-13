@@ -4,6 +4,17 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.12 source — current literature and a personal research notebook
+
+- Send publication-date ranges to scholarly sources, retain precise dates, and replace fixed-year ranking with the current calendar year. Expose search time, date range and indexing/cache limitations; publication recency is not a novelty score.
+- Add research-category selection to Search and a reading-note entry in paper details. Resume the note for the same paper and category, including before AI analysis; empty categories use `未分类`.
+- Reuse the knowledge library for reading notes, foundation cards and skill cards. Nine notebook sections retain paper material, AI suggestions and personal work separately, with reading status, Markdown export and editable extraction into reusable cards.
+- Offer bounded, on-demand study drafts through the existing Analysis model route. Use local abstract/full-text excerpts with source snapshots, require confirmation before append/save, and extract material URLs/public emails locally without a model or automatic browsing.
+- Preserve original note text by default, disable automatic condensation for structured notes, index provenance labels and personal notes, and detect concurrent edits instead of overwriting them. Handle late responses, type changes and model failures without losing user edits.
+- Add the [product and user manual](docs/USER_MANUAL.zh-CN.md), including a traffic-imputation walkthrough, limits and an acceptance checklist. Plotting, pseudocode and LaTeX/Word sections provide learning guidance and records, not new automatic experiment runners or document compilers.
+
+See [validation and delivery status](docs/reports/v1.2.12-research-notebook.zh-CN.md). This entry describes source changes; downloadable public installers are only those actually attached to a GitHub Release.
+
 ### 1.2.11 source — meaningful relevance and usable paper recommendations
 
 - Preserve Chinese subjects and repair/forecasting tasks during rule translation; normalize bilingual terms and require domain evidence instead of allowing generic `data`/`model` matches to dominate. Apply relevance tiers before quality/diversity ranking.

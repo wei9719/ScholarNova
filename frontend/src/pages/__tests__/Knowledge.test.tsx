@@ -9,7 +9,6 @@ vi.mock('@/api/client', () => ({ knowledgeApi: mocks }))
 vi.mock('@/stores/localeStore', () => ({
   useLocaleStore: () => ({ locale: 'zh', t: (key: string) => key }),
 }))
-vi.mock('@/components/KnowledgeDetail/KnowledgeDetail', () => ({ default: () => null }))
 vi.mock('@/components/KnowledgeForm/KnowledgeForm', () => ({ default: () => null }))
 
 const entries = Array.from({ length: 21 }, (_, index) => ({
@@ -23,7 +22,7 @@ beforeEach(() => {
   localStorage.clear()
   useKnowledgeStore.setState({
     items: [], total: 0, categories: [], selectedCategory: null, searchQuery: '',
-    routes: [], selectedItem: null, detailOpen: false, formOpen: false,
+    routes: [], selectedItem: null, detailOpen: false, formOpen: false, editingItem: null, formPrefill: null,
   })
   mocks.listRoutes.mockResolvedValue({ data: { items: [], total: 0 } })
   mocks.list.mockImplementation(async (_category, options) => {
@@ -65,7 +64,7 @@ it('does not reset fast pagination on mount or an unchanged trimmed keyword', as
     expect(screen.getByText('研究条目21')).toBeInTheDocument()
     expect(mocks.list).toHaveBeenCalledTimes(2)
 
-    fireEvent.change(screen.getByPlaceholderText('搜索全部知识的标题和正文'), { target: { value: '   ' } })
+    fireEvent.change(screen.getByPlaceholderText('搜索标题、正文和个人备注'), { target: { value: '   ' } })
     await act(async () => { vi.advanceTimersByTime(250) })
     expect(screen.getByText('共 21 条 · 第 2 / 2 页')).toBeInTheDocument()
     expect(mocks.list).toHaveBeenCalledTimes(2)
@@ -79,7 +78,7 @@ it('searches on the server across the library and resets the page', async () => 
   await screen.findByText('研究条目20')
   fireEvent.click(screen.getByRole('button', { name: '下一页' }))
   await screen.findByText('研究条目21')
-  fireEvent.change(screen.getByPlaceholderText('搜索全部知识的标题和正文'), { target: { value: '研究条目21' } })
+  fireEvent.change(screen.getByPlaceholderText('搜索标题、正文和个人备注'), { target: { value: '研究条目21' } })
   await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith(undefined, {
     page: 1, page_size: 20, keyword: '研究条目21',
   }))
@@ -169,4 +168,75 @@ it('ignores a route response that arrives after leaving the knowledge page', asy
   view.unmount()
   await act(async () => finish({ data: { items: [{ id: 'stale', title: '迟到路线' }], total: 1 } }))
   expect(useKnowledgeStore.getState().routes).toEqual([])
+})
+
+it('filters types on the server, resets pagination and retains the selected research category', async () => {
+  showKnowledge()
+  await screen.findByText('研究条目20')
+  fireEvent.click(screen.getByRole('button', { name: '食品 21' }))
+  await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith('食品', { page: 1, page_size: 20 }))
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+  await screen.findByText('研究条目21')
+  fireEvent.click(screen.getByRole('button', { name: '阅读笔记', exact: true }))
+  await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith('食品', { page: 1, page_size: 20, card_type: 'reading_note' }))
+  expect(screen.getByRole('button', { name: '阅读笔记', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.click(screen.getByRole('button', { name: '基础知识', exact: true }))
+  await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith('食品', { page: 1, page_size: 20, card_type: 'foundation' }))
+  fireEvent.click(screen.getByRole('button', { name: '技能卡', exact: true }))
+  await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith('食品', { page: 1, page_size: 20, card_type: 'skill' }))
+  fireEvent.click(screen.getByRole('button', { name: '全部', exact: true }))
+  await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith('食品', { page: 1, page_size: 20 }))
+})
+
+it('prefills a new reading note from the current category and type without saving', async () => {
+  useKnowledgeStore.setState({ selectedCategory: '食品' })
+  showKnowledge()
+  await screen.findByText('研究条目20')
+  fireEvent.click(screen.getByRole('button', { name: '阅读笔记', exact: true }))
+  await screen.findByText('研究条目20')
+  fireEvent.click(screen.getByRole('button', { name: 'knowledge.create' }))
+  const state = useKnowledgeStore.getState()
+  expect(state.formOpen).toBe(true)
+  expect(state.editingItem).toBeNull()
+  expect(state.formPrefill).toMatchObject({
+    category: '食品', card_type: 'reading_note', card_data: { schema_version: 1, status: 'to_read', sections: {} },
+  })
+})
+
+it('ignores a stale type response and does not show the old scope when the new type fails', async () => {
+  let finishOld!: (value: unknown) => void
+  mocks.list.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve }))
+  mocks.list.mockRejectedValueOnce(new Error('offline'))
+  showKnowledge()
+  fireEvent.click(screen.getByRole('button', { name: '技能卡', exact: true }))
+  await screen.findByText('common.error')
+  await act(async () => finishOld({ data: { items: entries, total: 21, categories } }))
+  expect(screen.queryByText('研究条目1')).not.toBeInTheDocument()
+  expect(useKnowledgeStore.getState().items).toEqual([])
+  expect(useKnowledgeStore.getState().categories).toEqual([])
+})
+
+it('shows reading progress and opens extraction in the existing form instead of saving', async () => {
+  const item = {
+    ...entries[0], title: '阅读中的论文', card_type: 'reading_note', updated_at: '2026-01-02',
+    source_paper_id: 'paper-1', source_paper_title: '来源论文', source_paper_doi: '10.test/source',
+    card_data: { schema_version: 1, status: 'reproducing', sections: {
+      prerequisites: { paper_notes: '必要概念', ai_suggestions: '学习建议', user_notes: '自己的理解' },
+      experiments: { paper_notes: '实验设置', ai_suggestions: '', user_notes: '未验证的实验计划' },
+    } },
+  }
+  mocks.list.mockResolvedValue({ data: { items: [item], total: 1, categories } })
+  showKnowledge()
+  expect(await screen.findByText('复现中')).toBeInTheDocument()
+  expect(screen.getByText('来源: 来源论文')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /阅读中的论文 阅读笔记/ }))
+  fireEvent.click(screen.getByRole('button', { name: '提炼基础知识' }))
+  const state = useKnowledgeStore.getState()
+  expect(state.formOpen).toBe(true)
+  expect(state.detailOpen).toBe(false)
+  expect(state.editingItem).toBeNull()
+  expect(state.formPrefill).toMatchObject({ card_type: 'foundation', category: '食品', source_paper_id: 'paper-1' })
+  expect(state.formPrefill?.content).toContain('必要概念')
+  expect(state.formPrefill?.content).not.toContain('实验设置')
+  expect(state.formPrefill?.notes).toContain(item.id)
 })

@@ -11,8 +11,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge import KnowledgeBase, KnowledgeChunk
+from app.services.features.reading_notes import reading_note_parts
 
-KNOWLEDGE_FEATURE_VERSION = "knowledge-chunker-v1"
+KNOWLEDGE_FEATURE_VERSION = "knowledge-chunker-v2"
 _WHITESPACE = re.compile(r"[ \t\r\f\v]+")
 _BOUNDARIES = ("\n\n", "\n", "。", "！", "？", ". ", "; ", "；")
 
@@ -80,8 +81,18 @@ def _chunk_id(
 
 
 def _build_chunks(knowledge: KnowledgeBase) -> list[KnowledgeChunk]:
-    normalized = _normalized_text(knowledge.content or "")
-    content_hash = _content_hash(normalized)
+    if knowledge.card_type == "reading_note" and isinstance(knowledge.card_data, dict):
+        parts = reading_note_parts(knowledge.card_data)
+    else:
+        parts = [("知识库材料（用户整理，未独立核验，非论文原文）", knowledge.content or "")]
+    if knowledge.notes:
+        parts.append(("个人备注，非论文事实", knowledge.notes))
+    texts = [
+        f"【{label}】\n{chunk}"
+        for label, text in parts
+        for chunk in split_knowledge_text(text, target_chars=1100)
+    ]
+    content_hash = _content_hash("\n\n".join(texts))
     return [
         KnowledgeChunk(
             id=_chunk_id(knowledge.id, content_hash, position),
@@ -92,7 +103,7 @@ def _build_chunks(knowledge: KnowledgeBase) -> list[KnowledgeChunk]:
             feature_version=KNOWLEDGE_FEATURE_VERSION,
             char_count=len(content),
         )
-        for position, content in enumerate(split_knowledge_text(normalized))
+        for position, content in enumerate(texts)
     ]
 
 

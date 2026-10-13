@@ -1,12 +1,14 @@
 <p align="center"><img src="docs/assets/scholarnova-cover-en.svg" width="800" alt="ScholarNova — AI Research Workspace"></p>
-<p align="center"><a href="https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5">Download / 下载</a> · <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="CHANGELOG.md">Changelog</a></p>
+<p align="center"><a href="https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5">Download / 下载</a> · <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="docs/USER_MANUAL.zh-CN.md">产品与使用手册</a> · <a href="CHANGELOG.md">Changelog</a></p>
 <p align="center"><a href="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/ci.yml"><img src="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/desktop-release.yml"><img src="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/desktop-release.yml/badge.svg" alt="Desktop builds"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/Own_source-MIT-d4a84f" alt="项目自有源代码：MIT"></a> <a href="docs/DESKTOP_LICENSE_REVIEW.md"><img src="https://img.shields.io/badge/Desktop_combination-AGPLv3-536b82" alt="桌面发行组合：AGPLv3"></a></p>
 
 # ScholarNova
 
 一个面向个人研究者的桌面科研工作台：**找论文 → 读全文 → 存知识 → 基于证据问答 → 规划研究路线**。支持中文 / English、明暗主题和自带模型 API Key（BYOK）。
 
-**当前源码：1.2.11，公开安装包仍以 Release 附件为准。** 本次修复中文研究主题被丢弃、通用词造成相关度虚高的问题，将“相关度”与“综合推荐”分开排序。搜索结果可筛选“有摘要 / 暂无摘要”，论文详情新增“相似推荐”：分别寻找研究内容、摘要结构和同刊参考，推荐可继续打开分析，频次明确为本次候选样本。详见 [检索与推荐验收、使用步骤](docs/reports/v1.2.11-search-recommendations.zh-CN.md)。此前的 [真实业务验收](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md)、[完整研究流程](docs/reports/v1.2.8-research-workflow.zh-CN.md)、[并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md) 和 [13 个同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md) 保留。源码更新不会自动升级已安装软件；Zotero 优化与本地模型接入暂缓，用户配置不变。
+**研究学习流程（当前源码）**：按全部、今年、近三年或自定义年份检索，在搜索页指定“笔记研究分类”，从论文详情新建或继续阅读笔记；九个章节分别保留论文材料、AI 建议和个人实践，再提炼基础知识、技能卡或导出 Markdown。不另建学习导航，继续使用知识库、智能体和研究路线。[产品与使用手册](docs/USER_MANUAL.zh-CN.md)包含交通流数据修复案例与逐步验收清单。检索时间不是索引更新时间，新近发表也不等于更有创新性；本阶段的复现、绘图和排版栏目提供记录与建议，不自动执行实验或生成原生 Word/PDF。
+
+**当前源码：1.2.12，公开安装包仍以 Release 附件为准。** 本次增加发表时间检索、分类阅读笔记、基础知识与技能卡，以及依据本地材料的分章节辅助整理。详见 [本轮验收记录](docs/reports/v1.2.12-research-notebook.zh-CN.md)。此前的 [检索与相似推荐优化](docs/reports/v1.2.11-search-recommendations.zh-CN.md)、[真实业务验收](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md)、[完整研究流程](docs/reports/v1.2.8-research-workflow.zh-CN.md)、[并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md) 和 [13 个同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md) 保留。已安装软件需通过新安装包升级。
 
 **历史真实 API 验证（10 月 3 日）**：38 次文本请求尝试中 34 次完成、4 次返回 429，服务商报告 50,573 Token，另完成 2 张路线图片。六任务/并发三的小样本总耗时从约 56 秒降到 34 秒；公开论文复测实际读取文字节选和 3 个图表页。当时发现的复杂检索问题在 1.2.11 中针对交通流等场景修复并复测，不等于所有学科检索质量均已验证，也不代表极限并发容量。此前的 [短文本探测及 Semantic Scholar 匿名限流记录](docs/reports/live-api-scenarios-2026-10-03.zh-CN.md) 单独保留。
 
@@ -36,9 +38,9 @@ Windows 日常使用优先选择 **Setup 安装版**。v1.2.5 便携版调整解
 ## 第一次使用
 
 1. **设置模型**：打开“设置”，选择 GLM、千问、硅基流动或其他已支持厂商，填写自己的 Key 和该平台可用的模型名称，测试后保存。无需更改代码。
-2. **搜索论文**：输入研究问题。默认自动规划，短主题直接检索；快速检索不调用规划模型；AI 规划最多尝试一次，约 20 秒模型预算，失败后转规则检索。这不是整个搜索的总时限。界面显示检索耗时、真实数据源、结果数量和来源状态；同一关键词可换模式或直接再次搜索。
+2. **搜索论文**：输入研究问题，选择全部年份、今年至今、近三年至今或自定义年份。日期条件传到检索来源，不只过滤当前列表；各源仍有收录延迟。默认自动规划，短主题直接检索；快速检索不调用规划模型；AI 规划最多尝试一次，约 20 秒模型预算，失败后转规则检索。这不是整个搜索的总时限。同一关键词可换方式、年份或直接再次搜索。
 3. **分析全文**：选择论文并分析。找不到开放全文时，可上传自己有权使用的 PDF。取得 PDF 不等于模型读完所有内容：分析会标明章节节选、文字截断及实际提供的图表页，便于回看原文核对。
-4. **积累知识**：将分析整理保存为分类知识条目。在“智能体”中建立独立对话，并选择本轮资料分类。对话文件夹负责整理对话，资料范围才决定查哪些知识；切换范围后，旧对话仍可看，但不作为新范围的模型上下文。
+4. **积累知识**：先指定“笔记研究分类”，在论文详情点击“阅读笔记 / 继续编辑”，按九个章节填写并保存。章节草稿使用“分析”任务模型，仅取本地摘要或缓存全文节选，确认追加后仍需保存；资源链接和公开邮箱使用本地提取。到知识库按类型与分类找回记录、提炼基础知识或技能卡、导出 Markdown，再到智能体选择资料分类提问。对话文件夹只整理聊天，不决定资料范围。
 5. **生成路线**：从知识库选择条目，填写研究目标和约束。先查看分析，再点击“保存为研究路线”；完整文字和知识关联一起保存，随后可生成路线和架构图。文本、视觉和出图可分别选用不同模型。
 
 普通关键词检索不要求 LLM Key；学术源是否可用取决于各源政策、Key、额度与网络。需要 AI 的操作会调用你配置的模型，费用由相应提供商计收。
@@ -77,14 +79,14 @@ Windows 日常使用优先选择 **Setup 安装版**。v1.2.5 便携版调整解
 | --- | --- |
 | 复杂文献检索 | 查询分解、多源并行召回、去重、条件过滤与综合排序；相关度和引用影响力分别展示 |
 | 论文阅读 | 正文、章节、表格、图注和可用图表页；本地 PDF 导入；标题中文翻译；可拖宽的侧栏 |
-| 个人研究积累 | 知识条目、研究路线、结构化架构图；按研究方向组织智能体对话 |
+| 个人研究积累 | 分类阅读笔记、基础知识与技能卡；九章节、个人进度、按需草稿、Markdown 导出；复用研究路线和结构化架构图 |
 | 有来源的问答 | BM25，或可选 Embedding + RRF；提供文献/片段定位、引用检查和工具记录 |
 | 多模型使用 | 主模型、备用模型及任务配置；统计供应商返回的 Token，控制超时与重试 |
 | 文献工具联动 | 检测本机 Zotero、读取集合和导入元数据；论文页可显式请求导出，写入能力由本机接口实际决定 |
 
 **回答有边界**：引用检查验证来源编号与逐句覆盖，不能证明每个结论都被原文支持。证据不足会提示补充材料；模型失败或引用修订未通过时返回有来源的原文摘录，明确说明原因。
 
-**缓存有边界**：搜索结果和临时分析在离开搜索页时清理，最近检索词只保留在当前窗口会话；知识条目与智能体对话属于用户保存的资料。
+**缓存有边界**：搜索结果、临时分析和本页“笔记研究分类”选择不作为永久搜索历史，离开搜索页时清理；最近检索词只保留在当前窗口会话。已保存笔记、知识条目与智能体对话另行保留；未保存表单不是自动归档，界面清理也不等于删除服务端文件缓存。
 
 ## 配置与连接
 

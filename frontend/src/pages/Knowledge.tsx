@@ -9,6 +9,8 @@ import toast from 'react-hot-toast'
 import { useLocaleStore } from '@/stores/localeStore'
 import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { knowledgeApi } from '@/api/client'
+import type { KnowledgeItem } from '@/api/types'
+import { readingNote } from '@/utils/studyNote'
 import KnowledgeDetail from '@/components/KnowledgeDetail/KnowledgeDetail'
 import KnowledgeForm from '@/components/KnowledgeForm/KnowledgeForm'
 
@@ -36,6 +38,7 @@ export default function Knowledge() {
   const [routesTotal, setRoutesTotal] = useState(0)
   const routesFetchSequence = useRef(0)
   const [page, setPage] = useState(1)
+  const [cardType, setCardType] = useState('')
   const [keyword, setKeyword] = useState(searchQuery.trim())
   const fetchSequence = useRef(0)
   const pageSize = 20
@@ -57,6 +60,7 @@ export default function Knowledge() {
     try {
       const response = await knowledgeApi.list(selectedCategory || undefined, {
         page, page_size: pageSize, ...(keyword ? { keyword } : {}),
+        ...(cardType ? { card_type: cardType } : {}),
       })
       if (sequence !== fetchSequence.current) return
       const lastPage = Math.max(1, Math.ceil(response.data.total / pageSize))
@@ -71,7 +75,7 @@ export default function Knowledge() {
     } finally {
       if (sequence === fetchSequence.current) setLoading(false)
     }
-  }, [selectedCategory, keyword, page])
+  }, [selectedCategory, keyword, page, cardType])
 
   const fetchRoutes = useCallback(async () => {
     const sequence = ++routesFetchSequence.current
@@ -106,15 +110,25 @@ export default function Knowledge() {
 
   const handleCreate = () => {
     setEditingItem(null)
-    setFormPrefill(null)
+    setFormPrefill({
+      category: selectedCategory || '', card_type: cardType || null,
+      ...(cardType === 'reading_note' ? { card_data: readingNote() } : {}),
+    })
     setFormOpen(true)
   }
 
-  const handleEdit = (item: any) => {
+  const handleEdit = (item: KnowledgeItem) => {
     setEditingItem(item)
     setFormPrefill(null)
     setFormOpen(true)
     setDetailOpen(false)
+  }
+
+  const handleDerive = (prefill: Partial<KnowledgeItem>) => {
+    setEditingItem(null)
+    setFormPrefill(prefill)
+    setDetailOpen(false)
+    setFormOpen(true)
   }
 
   const handleDelete = (_id: string) => {
@@ -133,6 +147,15 @@ export default function Knowledge() {
   const chooseCategory = (category: string | null) => {
     setPage(1)
     setSelectedCategory(category)
+  }
+  const chooseType = (type: string) => {
+    if (type === cardType) return
+    fetchSequence.current += 1
+    setItems([], 0)
+    setCategories([])
+    setDetailOpen(false)
+    setPage(1)
+    setCardType(type)
   }
 
   return (
@@ -158,7 +181,7 @@ export default function Knowledge() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={isChinese ? '搜索全部知识的标题和正文' : 'Search all knowledge titles and text'}
+                placeholder={isChinese ? '搜索标题、正文和个人备注' : 'Search titles, text and personal notes'}
                 className="pl-9 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 w-48 sm:w-64"
               />
             </div>
@@ -178,6 +201,21 @@ export default function Knowledge() {
             </button>
           </div>
         </div>
+        <div role="group" aria-label={isChinese ? '知识类型' : 'Knowledge type'} className="max-w-7xl mx-auto flex flex-wrap gap-2 mt-3">
+          {[
+            ['', isChinese ? '全部' : 'All'],
+            ['reading_note', isChinese ? '阅读笔记' : 'Reading notes'],
+            ['foundation', isChinese ? '基础知识' : 'Foundations'],
+            ['skill', isChinese ? '技能卡' : 'Skills'],
+          ].map(([type, label]) => (
+            <button key={type} onClick={() => chooseType(type)} aria-pressed={cardType === type}
+              className={clsx('rounded-lg px-3 py-1.5 text-sm transition-colors', cardType === type
+                ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800')}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Main Content */}
@@ -189,6 +227,9 @@ export default function Knowledge() {
               {t('knowledge.category')}
             </h3>
             <div className="space-y-0.5">
+              {selectedCategory && !categories.some((category) => category.name === selectedCategory) && (
+                <p className="px-2 py-1.5 text-xs text-gray-500">{isChinese ? '当前分类：' : 'Current category: '}{selectedCategory}</p>
+              )}
               <button
                 onClick={() => chooseCategory(null)}
                 className={clsx(
@@ -318,7 +359,7 @@ export default function Knowledge() {
                   {keyword ? (isChinese ? '没有匹配的知识条目' : 'No matching knowledge entries') : t('knowledge.empty')}
                 </h3>
                 <p className="text-sm text-gray-400 dark:text-gray-500 max-w-sm mb-6">
-                  {keyword ? (isChinese ? '已搜索所选范围的全部标题与正文，请调整关键词。' : 'All titles and text in the selected scope were searched. Try another keyword.') : t('knowledge.emptyDesc')}
+                  {keyword ? (isChinese ? '已搜索所选类型和分类的标题、正文与个人备注，请调整关键词。' : 'Titles, text and personal notes in the selected type and category were searched. Try another keyword.') : t('knowledge.emptyDesc')}
                 </p>
                 <button
                   onClick={handleCreate}
@@ -359,12 +400,13 @@ export default function Knowledge() {
       {detailOpen && selectedItem && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setDetailOpen(false)} />
-          <div className="relative w-full max-w-lg h-full bg-white dark:bg-gray-900 shadow-2xl overflow-y-auto">
+          <div className={clsx('relative w-full h-full bg-white dark:bg-gray-900 shadow-2xl overflow-y-auto', selectedItem.card_type === 'reading_note' ? 'max-w-2xl' : 'max-w-lg')}>
             <KnowledgeDetail
               item={selectedItem}
               onClose={() => setDetailOpen(false)}
               onEdit={handleEdit}
               onDelete={handleDelete}
+              onDerive={handleDerive}
             />
           </div>
         </div>
@@ -388,7 +430,7 @@ export default function Knowledge() {
 function KnowledgeCard({
   item, isChinese, onClick,
 }: {
-  item: any
+  item: KnowledgeItem
   isChinese: boolean
   onClick: () => void
 }) {
@@ -398,8 +440,22 @@ function KnowledgeCard({
     architecture: { icon: '🏗️', bg: 'bg-purple-50 dark:bg-purple-900/20', border: 'border-purple-200 dark:border-purple-700' },
     paper: { icon: '📄', bg: 'bg-orange-50 dark:bg-orange-900/20', border: 'border-orange-200 dark:border-orange-700' },
     research_point: { icon: '💡', bg: 'bg-green-50 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-700' },
+    reading_note: { icon: '📖', bg: 'bg-blue-50 dark:bg-blue-900/20', border: 'border-blue-200 dark:border-blue-700' },
+    foundation: { icon: '📚', bg: 'bg-green-50 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-700' },
+    skill: { icon: '🛠️', bg: 'bg-orange-50 dark:bg-orange-900/20', border: 'border-orange-200 dark:border-orange-700' },
   }
   const style = cardType ? cardStyles[cardType] : null
+  const labels: Record<string, string> = {
+    reading_note: isChinese ? '阅读笔记' : 'Reading note',
+    foundation: isChinese ? '基础知识' : 'Foundation',
+    skill: isChinese ? '技能卡' : 'Skill',
+    direction: isChinese ? '研究方向' : 'Direction',
+    architecture: isChinese ? '架构图' : 'Architecture',
+    paper: isChinese ? '推荐论文' : 'Paper',
+    research_point: isChinese ? '研究点' : 'Research point',
+    analysis: isChinese ? '研究分析' : 'Analysis',
+  }
+  const statuses = { to_read: isChinese ? '待阅读' : 'To read', reading: isChinese ? '阅读中' : 'Reading', reproducing: isChinese ? '复现中' : 'Reproducing', reviewed: isChinese ? '已复盘' : 'Reviewed' }
 
   return (
     <button
@@ -427,13 +483,11 @@ function KnowledgeCard({
               'inline-block px-1.5 py-0.5 text-[10px] font-medium rounded mt-1',
               style?.bg, style?.border
             )}>
-              {cardType === 'direction' ? (isChinese ? '研究方向' : 'Direction') :
-               cardType === 'architecture' ? (isChinese ? '架构图' : 'Architecture') :
-               cardType === 'paper' ? (isChinese ? '推荐论文' : 'Paper') :
-               (isChinese ? '研究点' : 'Research Point')}
+              {labels[cardType] || cardType}
             </span>
           )}
-          {item.source_paper_title && !cardType && (
+          {cardType === 'reading_note' && <span className="ml-2 text-xs text-gray-500">{statuses[readingNote(item.card_data).status]}</span>}
+          {item.source_paper_title && (
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
               {isChinese ? '来源: ' : 'Source: '}{item.source_paper_title}
             </p>

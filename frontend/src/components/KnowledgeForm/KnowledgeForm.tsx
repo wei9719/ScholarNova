@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   X, Loader2, Plus, Tag, FileText, BookOpen,
 } from 'lucide-react'
@@ -6,6 +6,9 @@ import toast from 'react-hot-toast'
 import { useLocaleStore } from '@/stores/localeStore'
 import { knowledgeApi } from '@/api/client'
 import type { KnowledgeItem, KnowledgeCreateRequest } from '@/api/types'
+import { readingNote, renderReadingNote, type ReadingNote } from '@/utils/studyNote'
+import StudyNoteEditor from './StudyNoteEditor'
+import { safeErrorMessage } from '@/utils/safeError'
 import './KnowledgeForm.css'
 
 interface KnowledgeFormProps {
@@ -36,6 +39,12 @@ export default function KnowledgeForm({
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [showNewCategory, setShowNewCategory] = useState(false)
+  const [cardType, setCardType] = useState('')
+  const [notebook, setNotebook] = useState<ReadingNote>(() => readingNote())
+  const [autoPolish, setAutoPolish] = useState(false)
+  const session = useRef<string | null>(null)
+  const initial = useRef('')
+  const snapshot = () => JSON.stringify({ title, category, newCategory, content, sourcePaperTitle, sourcePaperDoi, researchPoints, tags, notes, cardType, notebook })
 
   // 从分析内容自动提取研究点和标签
   const extractFromContent = (text: string) => {
@@ -83,53 +92,31 @@ export default function KnowledgeForm({
   }
 
   useEffect(() => {
-    if (editingItem) {
-      setTitle(editingItem.title)
-      setCategory(editingItem.category)
-      setContent(editingItem.content)
-      setSourcePaperTitle(editingItem.source_paper_title || '')
-      setSourcePaperDoi(editingItem.source_paper_doi || '')
-      setResearchPoints(editingItem.research_points)
-      setTags(editingItem.tags)
-      setNotes(editingItem.notes || '')
-      setShowNewCategory(false)
-      setNewCategory('')
-    } else if (prefill) {
-      setTitle(prefill.title || '')
-      setCategory(prefill.category || '')
-      setContent(prefill.content || '')
-      setSourcePaperTitle(prefill.source_paper_title || '')
-      setSourcePaperDoi(prefill.source_paper_doi || '')
-      // 如果没有预填的研究点和标签，从内容自动提取
-      if ((!prefill.research_points || prefill.research_points.length === 0) && prefill.content) {
-        const extracted = extractFromContent(prefill.content)
-        setResearchPoints(extracted.points)
-        setTags(extracted.tags)
-      } else {
-        setResearchPoints(prefill.research_points || [])
-        setTags(prefill.tags || [])
-      }
-      setNotes(prefill.notes || '')
-      setShowNewCategory(false)
-      setNewCategory('')
-    } else {
-      resetForm()
+    if (!open) { session.current = null; return }
+    const key = editingItem?.id || prefill?.source_paper_id || prefill?.title || 'new'
+    if (session.current === key) return
+    session.current = key
+    const item = editingItem || prefill
+    const extracted = !editingItem && !prefill?.research_points?.length && prefill?.content ? extractFromContent(prefill.content) : null
+    const values = {
+      title: item?.title || '', category: item?.category || '', newCategory: '', content: item?.content || '',
+      sourcePaperTitle: item?.source_paper_title || '', sourcePaperDoi: item?.source_paper_doi || '',
+      researchPoints: extracted?.points || item?.research_points || [], tags: extracted?.tags || item?.tags || [],
+      notes: item?.notes || '', cardType: item?.card_type || '', notebook: readingNote(item?.card_data),
     }
+    setCardType(values.cardType)
+    setNotebook(values.notebook)
+    setAutoPolish(false)
+    setTitle(values.title); setCategory(values.category); setContent(values.content)
+    setSourcePaperTitle(values.sourcePaperTitle); setSourcePaperDoi(values.sourcePaperDoi)
+    setResearchPoints(values.researchPoints); setTags(values.tags); setNotes(values.notes)
+    setShowNewCategory(false); setNewCategory(''); setResearchPointInput(''); setTagInput('')
+    initial.current = JSON.stringify(values)
   }, [editingItem, prefill, open])
-
-  const resetForm = () => {
-    setTitle('')
-    setCategory('')
-    setContent('')
-    setSourcePaperTitle('')
-    setSourcePaperDoi('')
-    setResearchPoints([])
-    setResearchPointInput('')
-    setTags([])
-    setTagInput('')
-    setNotes('')
-    setShowNewCategory(false)
-    setNewCategory('')
+  const handleClose = () => {
+    if (saving) return
+    if (initial.current && snapshot() !== initial.current && !window.confirm(isChinese ? '笔记尚未保存，确定放弃本次修改？' : 'Discard unsaved changes?')) return
+    onClose()
   }
 
   const confirmNewCategory = () => {
@@ -180,7 +167,7 @@ export default function KnowledgeForm({
       return
     }
 
-    const finalCategory = showNewCategory ? newCategory.trim() : category
+    const finalCategory = (showNewCategory ? newCategory : category).trim()
     if (!finalCategory) {
       toast.error(isChinese ? '请选择或输入分类' : 'Please select or enter a category')
       return
@@ -188,7 +175,6 @@ export default function KnowledgeForm({
 
     setSaving(true)
     try {
-      const hasSourcePaper = !!(editingItem?.source_paper_id || prefill?.source_paper_id)
       const data: KnowledgeCreateRequest = {
         title: title.trim(),
         category: finalCategory,
@@ -199,19 +185,21 @@ export default function KnowledgeForm({
         research_points: researchPoints,
         tags,
         notes: notes.trim() || null,
-        auto_polish: hasSourcePaper && !editingItem, // 从论文分析保存时自动润色
+        auto_polish: cardType !== 'reading_note' && autoPolish && !editingItem,
+        card_type: cardType || null,
+        ...(cardType === 'reading_note' ? { card_data: notebook } : editingItem?.card_type === cardType ? { card_data: editingItem.card_data } : {}),
       }
 
       if (editingItem) {
-        await knowledgeApi.update(editingItem.id, data)
+        await knowledgeApi.update(editingItem.id, { ...data, expected_updated_at: editingItem.updated_at })
       } else {
         await knowledgeApi.create(data)
       }
       toast.success(t('knowledge.saveSuccess'))
       onSuccess()
       onClose()
-    } catch {
-      toast.error(t('knowledge.saveError'))
+    } catch (error) {
+      toast.error(safeErrorMessage(error, t('knowledge.saveError')))
     } finally {
       setSaving(false)
     }
@@ -220,28 +208,53 @@ export default function KnowledgeForm({
   if (!open) return null
 
   return (
-    <div className="knowledge-form-overlay" onClick={onClose}>
-      <div className="knowledge-form animate-fade-in" onClick={(e) => e.stopPropagation()}>
+    <div className="knowledge-form-overlay" onClick={handleClose}>
+      <div role="dialog" aria-label={isChinese ? '编辑知识与笔记' : 'Edit knowledge and notes'} className={`knowledge-form animate-fade-in ${cardType === 'reading_note' ? 'study-form' : ''}`} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="knowledge-form-header">
           <h2 className="knowledge-form-title">
             {editingItem ? t('knowledge.editTitle') : t('knowledge.createTitle')}
           </h2>
-          <button onClick={onClose} className="knowledge-form-close">
+          <button onClick={handleClose} aria-label={isChinese ? '关闭编辑器' : 'Close editor'} disabled={saving} className="knowledge-form-close">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="knowledge-form-body custom-scrollbar">
-          {/* Title */}
+          <fieldset disabled={saving}>
+          <div className="form-metadata">
           <div className="knowledge-form-field">
+            <label className="knowledge-form-label" htmlFor="knowledge-kind">{isChinese ? '资料类型' : 'Entry type'}</label>
+            <select id="knowledge-kind" value={cardType} className="knowledge-form-input" onChange={e => {
+              const next = e.target.value
+              if (cardType === 'reading_note' && next !== 'reading_note') setContent(renderReadingNote(notebook))
+              if (next === 'reading_note' && cardType !== 'reading_note' && content && content !== renderReadingNote(notebook)) {
+                const previous = notebook.sections.overview || { paper_notes: '', ai_suggestions: '', user_notes: '' }
+                const userNotes = [previous.user_notes, content].filter(Boolean).join('\n\n--- 普通正文转入的个人记录 ---\n\n')
+                if (userNotes.length > 20000) { toast.error(isChinese ? '普通正文过长，请先保存或导出后再转为阅读笔记，避免丢失内容。' : 'Content is too long to convert safely. Save or export it first.'); return }
+                setNotebook({ ...notebook, sections: { ...notebook.sections, overview: { ...previous, user_notes: userNotes } } })
+              }
+              setCardType(next)
+            }}>
+              <option value="">{isChinese ? '普通知识条目' : 'Knowledge entry'}</option>
+              <option value="reading_note">{isChinese ? '阅读笔记' : 'Reading note'}</option>
+              <option value="foundation">{isChinese ? '基础知识卡' : 'Foundation card'}</option>
+              <option value="skill">{isChinese ? '技能卡' : 'Skill card'}</option>
+              {cardType && !['reading_note', 'foundation', 'skill'].includes(cardType) && <option value={cardType}>{cardType}</option>}
+            </select>
+            <p className="knowledge-form-hint">{isChinese ? '分类表示研究方向；类型表示资料用途。它们共用同一个知识库。' : 'Categories organize research topics; types describe how entries are used. All remain in one library.'}</p>
+          </div>
+          {/* Title */}
+          <div className="knowledge-form-field form-title-field">
             <label className="knowledge-form-label">
               <FileText className="w-4 h-4" />
               {t('knowledge.titleField')} *
             </label>
             <input
               type="text"
+              aria-label={isChinese ? '笔记标题' : 'Entry title'}
+              maxLength={500}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={t('knowledge.titlePlaceholder')}
@@ -250,7 +263,7 @@ export default function KnowledgeForm({
           </div>
 
           {/* Category */}
-          <div className="knowledge-form-field">
+          <div className="knowledge-form-field form-category-field">
             <label className="knowledge-form-label">
               <FileText className="w-4 h-4" />
               {t('knowledge.category')} *
@@ -258,11 +271,13 @@ export default function KnowledgeForm({
             {!showNewCategory ? (
               <div className="flex gap-2">
                 <select
+                  aria-label={isChinese ? '研究分类' : 'Research category'}
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                   className="knowledge-form-input flex-1"
                 >
                   <option value="">{t('knowledge.categorySelect')}</option>
+                  {category && !categories.some(cat => cat.name === category) && <option value={category}>{category}</option>}
                   {categories.map((cat) => (
                     <option key={cat.name} value={cat.name}>{cat.name} ({cat.count})</option>
                   ))}
@@ -280,6 +295,8 @@ export default function KnowledgeForm({
               <div className="flex gap-2">
                 <input
                   type="text"
+                  aria-label={isChinese ? '新分类名称' : 'New category name'}
+                  maxLength={100}
                   value={newCategory}
                   onChange={(e) => setNewCategory(e.target.value)}
                   onKeyDown={(e) => {
@@ -307,11 +324,12 @@ export default function KnowledgeForm({
           </div>
 
           {/* Source Paper */}
-          <div className="knowledge-form-field">
-            <label className="knowledge-form-label">
+          <details className="knowledge-form-field form-source-field" open={cardType !== 'reading_note'}>
+            <summary className="knowledge-form-label cursor-pointer">
               <BookOpen className="w-4 h-4" />
               {t('knowledge.sourcePaper')} {t('knowledge.sourcePaperOptional')}
-            </label>
+              {sourcePaperTitle && cardType === 'reading_note' && <span className="truncate font-normal"> · {sourcePaperTitle}</span>}
+            </summary>
             <input
               type="text"
               value={sourcePaperTitle}
@@ -326,22 +344,26 @@ export default function KnowledgeForm({
               placeholder={t('knowledge.sourcePaperDOI')}
               className="knowledge-form-input mt-2"
             />
+          </details>
           </div>
 
           {/* Content */}
-          <div className="knowledge-form-field">
+          {cardType === 'reading_note' ? <StudyNoteEditor value={notebook} onChange={setNotebook} paperId={editingItem?.source_paper_id || prefill?.source_paper_id} chinese={isChinese} disabled={saving} /> : <div className="knowledge-form-field">
             <label className="knowledge-form-label">
               <FileText className="w-4 h-4" />
               {t('knowledge.content')}
             </label>
             <textarea
               value={content}
+              aria-label={isChinese ? '正文' : 'Content'}
               onChange={(e) => setContent(e.target.value)}
               placeholder={t('knowledge.contentPlaceholder')}
               rows={6}
               className="knowledge-form-textarea"
             />
-          </div>
+            {['foundation', 'skill'].includes(cardType) && <p className="knowledge-form-hint">{cardType === 'foundation' ? (isChinese ? '建议记录定义、前置条件、推导、例子、学习资料和自测结果。' : 'Include definitions, prerequisites, derivations, examples, resources and self-checks.') : (isChinese ? '建议记录适用场景、输入输出、依赖、步骤、命令、示例和验收标准。' : 'Include use cases, inputs, outputs, dependencies, steps, commands, examples and checks.')}</p>}
+            {!editingItem && <label className="knowledge-form-hint"><input type="checkbox" checked={autoPolish} onChange={e => setAutoPolish(e.target.checked)} /> {isChinese ? '使用 AI 压缩正文（可选，会替换为短摘要；长笔记请勿勾选）' : 'AI condensation (optional; replaces content with a short summary)'}</label>}
+          </div>}
 
           {/* Research Points */}
           <div className="knowledge-form-field">
@@ -419,11 +441,12 @@ export default function KnowledgeForm({
               className="knowledge-form-textarea"
             />
           </div>
+          </fieldset>
         </form>
 
         {/* Footer */}
         <div className="knowledge-form-footer">
-          <button onClick={onClose} className="knowledge-form-cancel-btn">
+          <button onClick={handleClose} disabled={saving} className="knowledge-form-cancel-btn">
             {t('common.cancel')}
           </button>
           <button

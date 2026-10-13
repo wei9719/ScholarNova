@@ -25,7 +25,7 @@ from app.services.search.constraint_verifier import ConstraintVerifier
 from app.services.search.deduplicator import Deduplicator
 from app.services.search.query_planner import QueryPlanner
 from app.services.search.ranker import Ranker
-from app.services.search.retriever import Retriever, RetrieveResult
+from app.services.search.retriever import Retriever, RetrieveResult, publication_bounds
 
 logger = logging.getLogger(__name__)
 
@@ -86,16 +86,16 @@ class SearchOrchestrator:
             all_constraints = list(request.constraints)
             if request.date_from:
                 all_constraints.append(Constraint(
-                    key="year",
+                    key="publication_date",
                     operator="gte",
-                    value=int(request.date_from[:4]),
+                    value=request.date_from,
                     description=f"Published after {request.date_from}",
                 ))
             if request.date_to:
                 all_constraints.append(Constraint(
-                    key="year",
+                    key="publication_date",
                     operator="lte",
-                    value=int(request.date_to[:4]),
+                    value=request.date_to,
                     description=f"Published before {request.date_to}",
                 ))
             if request.min_citations is not None:
@@ -132,6 +132,7 @@ class SearchOrchestrator:
             retrieve_result = await self.retriever.retrieve(
                 sub_queries=query_plan.sub_queries,
                 max_results=request.max_results * 2,  # 多取一些用于去重后仍有足够结果
+                **publication_bounds(query_plan.constraints),
             )
 
             raw_paper_count = retrieve_result.total_papers
@@ -143,6 +144,9 @@ class SearchOrchestrator:
             logger.info(f"[{run_id}] Step 3: 去重")
 
             deduplicated_papers = self.deduplicator.deduplicate(retrieve_result.papers)
+            deduplicated_papers = self.ranker.filter_hard_constraints(
+                deduplicated_papers, query_plan.constraints,
+            )
 
             logger.info(
                 f"[{run_id}] 去重后: {len(deduplicated_papers)} 篇 "

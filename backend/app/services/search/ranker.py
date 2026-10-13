@@ -25,6 +25,7 @@ Stage 4 - MMR 多样性重排:
 
 import logging
 import math
+from datetime import date
 import re
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
@@ -186,9 +187,10 @@ class Ranker:
         total = max(1, len(citations))
         max_velocity = 0.0
         velocities: Dict[str, float] = {}
+        current_year = date.today().year
 
         for paper in candidate_papers:
-            age = max(1, 2026 - paper.year + 1) if paper.year else 1
+            age = max(1, current_year - paper.year + 1) if paper.year else 1
             velocity = max(0, paper.citation_count) / age
             velocities[str(paper.id)] = velocity
             max_velocity = max(max_velocity, velocity)
@@ -212,7 +214,7 @@ class Ranker:
                 impact_label = "well_cited"
             elif count > 0 and percentile >= 0.40:
                 impact_label = "established"
-            elif paper.year and paper.year >= 2024:
+            elif paper.year and current_year - 2 <= paper.year <= current_year:
                 impact_label = "emerging"
             else:
                 impact_label = "limited_signal"
@@ -402,7 +404,7 @@ class Ranker:
         """Apply deterministic user/query constraints before final ranking."""
         if not constraints:
             return list(papers)
-        hard_keys = {"year", "min_citations", "open_access", "author", "venue"}
+        hard_keys = {"year", "publication_date", "min_citations", "open_access", "author", "venue"}
         normalized = [
             (
                 constraint.key if hasattr(constraint, "key") else constraint.get("key", ""),
@@ -429,6 +431,21 @@ class Ranker:
     ) -> bool:
         """检查单个约束是否满足"""
         try:
+            if key == "publication_date":
+                boundary = date.fromisoformat(str(value))
+                observed = paper.publication_date
+                if observed is None:
+                    if paper.year is None:
+                        return False
+                    # Do not invent Jan 1 for a record that only has a year.
+                    observed, boundary = paper.year, boundary.year
+                if operator == "gte":
+                    return observed >= boundary
+                if operator == "lte":
+                    return observed <= boundary
+                if operator == "eq":
+                    return observed == boundary
+
             if key == "year":
                 if paper.year is None:
                     return False
@@ -508,7 +525,7 @@ class Ranker:
         if paper.year is None:
             return 0.5  # 无年份信息时给中间分
 
-        current_year = 2026
+        current_year = date.today().year
         age = max(0, current_year - paper.year)
 
         # 根据意图选择衰减策略

@@ -2,12 +2,12 @@
 搜索相关的 Pydantic Schemas
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.evidence import EvidenceSpan
 from app.schemas.paper import Paper
@@ -48,6 +48,20 @@ class SearchRequest(BaseModel):
     date_to: Optional[str] = Field(None, description="结束日期 (YYYY-MM-DD)")
     min_citations: Optional[int] = Field(None, description="最小引用数", ge=0)
     open_access_only: bool = Field(False, description="仅开放获取论文")
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def valid_publication_date(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            if len(value) != 10 or date.fromisoformat(value).isoformat() != value:
+                raise ValueError("日期须为有效的 YYYY-MM-DD")
+        return value
+
+    @model_validator(mode="after")
+    def ordered_publication_dates(self):
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("起始日期不能晚于结束日期")
+        return self
 
     @field_validator("sources")
     @classmethod

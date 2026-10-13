@@ -243,7 +243,10 @@ class BaseSource(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def search(self, query: str, max_results: int = 50) -> List[Paper]:
+    async def search(
+        self, query: str, max_results: int = 50, *,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> List[Paper]:
         """
         搜索论文
 

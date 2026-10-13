@@ -286,6 +286,11 @@ export interface SearchRunDetail {
     latency_ms?: number
     successful_calls?: number
     failed_calls?: number
+    searched_at?: string
+    date_from?: string | null
+    date_to?: string | null
+    year_only_count?: number
+    freshness_note?: string
     token_usage?: Record<string, unknown>
   }
   result_summary?: {
@@ -515,6 +520,8 @@ export interface KnowledgeItem {
   research_points: string[]
   tags: string[]
   notes: string | null
+  card_type?: string | null
+  card_data?: Record<string, unknown> | null
   created_at: string
   updated_at: string
   polish_status?: 'skipped' | 'completed' | 'invalid_response' | 'model_unavailable' | null
@@ -544,11 +551,29 @@ export interface KnowledgeCreateRequest {
   tags?: string[]
   notes?: string | null
   auto_polish?: boolean
-  card_type?: string
-  card_data?: Record<string, any>
+  card_type?: string | null
+  card_data?: Record<string, unknown> | null
 }
 
-export interface KnowledgeUpdateRequest extends Partial<KnowledgeCreateRequest> {}
+export interface KnowledgeUpdateRequest extends Partial<KnowledgeCreateRequest> {
+  expected_updated_at?: string
+}
+
+export type StudySection = 'overview' | 'experiments' | 'resources' | 'math' | 'prerequisites' | 'writing' | 'figures' | 'translation' | 'formatting'
+export interface StudyDraft {
+  section: StudySection
+  content: string
+  material_scope: 'abstract' | 'fulltext_excerpt'
+  sources: Array<{ label: string; id: string; content_hash: string; section: string; page?: number | null; excerpt: string }>
+  model_completed: boolean
+  provider?: string | null
+  model?: string | null
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  fallback_used: boolean
+  warnings: string[]
+}
 
 export interface ResearchRoute {
   id: string

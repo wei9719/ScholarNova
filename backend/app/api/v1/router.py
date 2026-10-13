@@ -16,6 +16,7 @@ from app.api.v1 import (
     papers,
     recommendations,
     search,
+    study,
 )
 
 # 创建 API 路由器
@@ -44,6 +45,12 @@ api_router.include_router(
     analysis.router,
     prefix="/papers",
     tags=["analysis"],
+)
+
+api_router.include_router(
+    study.router,
+    prefix="/study",
+    tags=["study"],
 )
 
 api_router.include_router(

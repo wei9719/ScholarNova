@@ -11,6 +11,7 @@ API 文档: https://api.crossref.org/
 import html
 import logging
 import re
+from datetime import date
 from typing import List, Optional
 
 from app.schemas.paper import Paper
@@ -55,7 +56,10 @@ class CrossRefSource(BaseSource):
     # 搜索
     # ------------------------------------------------------------------
 
-    async def search(self, query: str, max_results: int = 50) -> List[Paper]:
+    async def search(
+        self, query: str, max_results: int = 50, *,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> List[Paper]:
         """
         搜索论文
 
@@ -72,6 +76,13 @@ class CrossRefSource(BaseSource):
             "sort": "relevance",
             "order": "desc",
         }
+        filters = []
+        if date_from:
+            filters.append(f"from-pub-date:{date_from}")
+        if date_to:
+            filters.append(f"until-pub-date:{date_to}")
+        if filters:
+            params["filter"] = ",".join(filters)
 
         try:
             response = await self._request_with_retry("GET", "/works", params=params)
@@ -199,15 +210,21 @@ class CrossRefSource(BaseSource):
                 if parts:
                     authors.append(" ".join(parts))
 
-            # 年份
-            year = None
-            for date_field in ("published-print", "published-online", "created"):
-                published = data.get(date_field)
-                if published:
-                    date_parts = published.get("date-parts", [[]])
-                    if date_parts and date_parts[0]:
-                        year = date_parts[0][0]
-                        break
+            # Prefer the earliest reported publication, not DOI registration.
+            # A year/month-only value must not become a fabricated exact date.
+            publication_parts = []
+            for date_field in ("published-online", "published-print", "published", "issued"):
+                parts = (data.get(date_field) or {}).get("date-parts", [[]])
+                if parts and parts[0]:
+                    try:
+                        values = tuple(int(value) for value in parts[0][:3])
+                        date(*values, *([1] * (3 - len(values))))
+                        publication_parts.append(values)
+                    except (ValueError, TypeError):
+                        continue
+            earliest = min(publication_parts) if publication_parts else ()
+            year = earliest[0] if earliest else None
+            publication_date = date(*earliest) if len(earliest) == 3 else None
 
             # 期刊/会议
             venue = None
@@ -237,6 +254,7 @@ class CrossRefSource(BaseSource):
                 authors=authors,
                 abstract=self._clean_abstract(data.get("abstract")),
                 year=year,
+                publication_date=publication_date,
                 venue=venue,
                 citation_count=data.get("is-referenced-by-count", 0),
                 doi=doi,

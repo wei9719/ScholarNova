@@ -8,10 +8,12 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useLocaleStore } from '@/stores/localeStore'
 import { knowledgeApi, papersApi, zoteroApi } from '@/api/client'
-import type { Paper, PaperDetail as PaperDetailType, AnalysisResult, FulltextStatus } from '@/api/types'
+import type { Paper, PaperDetail as PaperDetailType, AnalysisResult, FulltextStatus, KnowledgeItem } from '@/api/types'
 import KnowledgeForm from '@/components/KnowledgeForm/KnowledgeForm'
 import SimilarPapers from './SimilarPapers'
 import { getAbstractText } from '@/utils/abstract'
+import { emptyEntry, readingNote } from '@/utils/studyNote'
+import { safeErrorMessage } from '@/utils/safeError'
 import './PaperDetail.css'
 
 interface PaperDetailProps {
@@ -25,6 +27,8 @@ interface PaperDetailProps {
   onAnalyze: (query?: string) => void
   onFulltextUploaded: () => void
   onSelectPaper?: (paper: Paper) => void
+  researchCategory?: string
+  sourceQuery?: string
 }
 
 type AnalysisKey = 'full' | 'research_points' | 'limitations' | 'methodology'
@@ -38,7 +42,7 @@ const analysisConfig: Record<AnalysisKey, { icon: any; zhLabel: string; enLabel:
 
 export default function PaperDetailPanel({
   paper, analysis, analysisLoading,
-  onClose, onAnalyze, onFulltextUploaded, onSelectPaper,
+  onClose, onAnalyze, onFulltextUploaded, onSelectPaper, researchCategory = '', sourceQuery = '',
 }: PaperDetailProps) {
   const { locale } = useLocaleStore()
   const [copiedField, setCopiedField] = useState<string | null>(null)
@@ -47,6 +51,18 @@ export default function PaperDetailPanel({
   const [translating, setTranslating] = useState(false)
   const [activeAnalysis, setActiveAnalysis] = useState<AnalysisKey | null>(null)
   const [knowledgeFormOpen, setKnowledgeFormOpen] = useState(false)
+  const [knowledgeOpening, setKnowledgeOpening] = useState(false)
+  const [knowledgeEditing, setKnowledgeEditing] = useState<KnowledgeItem | null>(null)
+  const [knowledgePrefill, setKnowledgePrefill] = useState<Partial<KnowledgeItem> | null>(null)
+  const noteScope = `${paper.id}\u0000${researchCategory.trim() || '未分类'}`
+  const activeScopeRef = useRef(noteScope)
+  const noteRequestRef = useRef(0)
+  activeScopeRef.current = noteScope
+  useEffect(() => {
+    activeScopeRef.current = noteScope
+    setKnowledgeOpening(false); setKnowledgeFormOpen(false)
+    return () => { activeScopeRef.current = ''; noteRequestRef.current++ }
+  }, [noteScope])
   const [knowledgeCategories, setKnowledgeCategories] = useState<{ name: string; count: number }[]>([])
   const [fulltextStatus, setFulltextStatus] = useState<FulltextStatus | null>(null)
   const [uploadingFulltext, setUploadingFulltext] = useState(false)
@@ -213,13 +229,43 @@ export default function PaperDetailPanel({
   }
 
   const handleSaveToKnowledge = async () => {
+    if (knowledgeOpening) return
+    setKnowledgeOpening(true)
+    const paperId = paper.id
+    const noteCategory = researchCategory.trim() || '未分类'
+    const requestId = ++noteRequestRef.current
+    const isCurrent = () => activeScopeRef.current === noteScope && noteRequestRef.current === requestId
     try {
-      const response = await knowledgeApi.getCategories()
+      const [response, existing] = await Promise.all([
+        knowledgeApi.getCategories(),
+        knowledgeApi.list(noteCategory, { card_type: 'reading_note', source_paper_id: paperId, page_size: 1 }),
+      ])
+      if (!isCurrent()) return
       setKnowledgeCategories(response.data)
-    } catch {
-      setKnowledgeCategories([])
+      setKnowledgeEditing(existing.data.items[0] || null)
+      const notebook = readingNote()
+      notebook.status = 'reading'
+      notebook.source_query = sourceQuery.slice(0, 2000)
+      const analysisText = analysis ? [
+        `已有分析（${analysis.document_coverage === 'fulltext' ? '全文材料，覆盖范围以原分析提示为准' : '摘要材料'}）`,
+        analysis.summary, analysis.methodology,
+        ...analysis.key_findings, ...analysis.strengths, ...analysis.weaknesses, analysis.relevance_to_query,
+      ].filter(Boolean).join('\n\n') : ''
+      const bounded = (text: string) => text.length <= 20000 ? text : `${text.slice(0, 19880)}\n\n[此栏达到长度上限；剩余内容请回到论文原分析查看。]`
+      notebook.sections.overview = {
+        ...emptyEntry(), paper_notes: bounded(abstractText || ''), ai_suggestions: bounded(analysisText),
+      }
+      setKnowledgePrefill({
+        title: paper.title, category: noteCategory, content: '', card_type: 'reading_note', card_data: notebook,
+        source_paper_id: paper.id, source_paper_title: paper.title, source_paper_doi: paper.doi,
+        research_points: [], tags: paper.keywords?.slice(0, 5) || [], notes: null,
+      })
+      setKnowledgeFormOpen(true)
+    } catch (error) {
+      if (isCurrent()) toast.error(safeErrorMessage(error, isChinese ? '读取笔记失败，请重试' : 'Could not open notes. Please retry.'))
+    } finally {
+      if (isCurrent()) setKnowledgeOpening(false)
     }
-    setKnowledgeFormOpen(true)
   }
 
   const copyToClipboard = async (text: string, field: string) => {
@@ -306,6 +352,13 @@ export default function PaperDetailPanel({
       </div>
 
       {/* Zotero 文件夹选择器 */}
+      <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
+        <button type="button" className="paper-link" disabled={knowledgeOpening} onClick={handleSaveToKnowledge}>
+          {knowledgeOpening ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BookOpen className="w-3.5 h-3.5" />}
+          {isChinese ? '阅读笔记 / 继续编辑' : 'Reading note / continue editing'}
+        </button>
+        <p className="text-xs text-gray-500 mt-1">{isChinese ? `分类：${researchCategory.trim() || '未分类'} · 摘录、复现、公式与写作笔记` : `Category: ${researchCategory.trim() || '未分类 (Uncategorized)'} · reading, reproduction, math and writing`}</p>
+      </div>
       {zoteroPickerOpen && (
         <div className="mt-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40">
           <div className="flex items-center gap-2 mb-2">
@@ -566,11 +619,11 @@ export default function PaperDetailPanel({
                 {/* Save to Knowledge Button */}
                 <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
                   <button
-                    onClick={handleSaveToKnowledge}
+                    onClick={handleSaveToKnowledge} disabled={knowledgeOpening}
                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-900/50 border border-primary-200 dark:border-primary-800 transition-colors"
                   >
                     <BookMarked className="w-4 h-4" />
-                    {isChinese ? '保存到知识库' : 'Save to Knowledge Base'}
+                    {isChinese ? '整理为阅读笔记 / 继续编辑' : 'Create / continue reading note'}
                   </button>
                 </div>
               </div>
@@ -583,18 +636,8 @@ export default function PaperDetailPanel({
       {/* Knowledge Form for saving analysis */}
       <KnowledgeForm
         open={knowledgeFormOpen}
-        editingItem={null}
-        prefill={{
-          title: paper.title,
-          category: '',
-          content: analysis?.summary || '',
-          source_paper_id: paper.id,
-          source_paper_title: paper.title,
-          source_paper_doi: paper.doi,
-          research_points: analysis?.key_findings || [],
-          tags: paper.keywords?.slice(0, 5) || [],
-          notes: null,
-        }}
+        editingItem={knowledgeEditing}
+        prefill={knowledgePrefill}
         categories={knowledgeCategories}
         onClose={() => setKnowledgeFormOpen(false)}
         onSuccess={() => {

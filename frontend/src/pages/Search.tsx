@@ -2,11 +2,12 @@ import { useEffect, useCallback, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { Loader2, Search as SearchIcon, AlertCircle, BookOpen, Clock3, Database, ExternalLink } from 'lucide-react'
-import { searchApi, papersApi, networkApi } from '@/api/client'
+import { searchApi, papersApi, networkApi, knowledgeApi } from '@/api/client'
 import type { AnalysisResult, SearchPlanningMode } from '@/api/types'
 import { useSearchStore } from '@/stores/searchStore'
 import { useLocaleStore } from '@/stores/localeStore'
 import { safeErrorMessage } from '@/utils/safeError'
+import { searchDates, type SearchPeriod } from '@/utils/searchDates'
 import { addSearchHistory, clearSearchHistory, getSearchHistory } from '@/utils/searchHistory'
 import SearchBar from '@/components/SearchBar/SearchBar'
 import QueryPlan from '@/components/QueryPlan/QueryPlan'
@@ -40,6 +41,17 @@ export default function Search() {
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [planningMode, setPlanningMode] = useState<SearchPlanningMode>('auto')
+  const [period, setPeriod] = useState<SearchPeriod>('all')
+  const [fromYear, setFromYear] = useState(String(new Date().getFullYear() - 2))
+  const [toYear, setToYear] = useState(String(new Date().getFullYear()))
+  const [researchCategory, setResearchCategory] = useState('')
+  const [noteCategories, setNoteCategories] = useState<string[]>([])
+  useEffect(() => {
+    let active = true
+    // Notes can still be categorized manually if loading the suggestions fails.
+    Promise.resolve().then(() => knowledgeApi.getCategories()).then(({ data }) => { if (active) setNoteCategories(data.map(item => item.name)) }).catch(() => {})
+    return () => { active = false }
+  }, [])
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = Number(window.localStorage.getItem('scholarnova-detail-width'))
     return Number.isFinite(saved) && saved >= 360 ? saved : 440
@@ -122,6 +134,9 @@ export default function Search() {
   }, [queryParam])
 
   const performSearch = async (searchQuery: string) => {
+    let dateRange: ReturnType<typeof searchDates>
+    try { dateRange = searchDates(period, fromYear, toYear) }
+    catch { toast.error(locale === 'zh' ? '请填写有效年份：开始年份不得晚于结束年份，结束年份不超过今年。' : 'Enter a valid year range ending no later than this year.'); return }
     const generation = ++generationRef.current
     selectionRef.current++
     setQuery(searchQuery)
@@ -142,7 +157,7 @@ export default function Search() {
     setElapsedMs(0)
 
     try {
-      const response = await searchApi.create({ query: searchQuery, planning_mode: planningMode })
+      const response = await searchApi.create({ query: searchQuery, planning_mode: planningMode, ...dateRange })
       if (generation !== generationRef.current) return
       pollSearchStatus(response.data.run_id, generation)
     } catch (err: any) {
@@ -336,6 +351,22 @@ export default function Search() {
               ? (locale === 'zh' ? 'AI 规划单次最多等待约 20 秒，失败转快速检索；这不是整个搜索的总时限。' : 'Each AI planning attempt waits up to about 20s, then falls back to fast search. This is not the total search time limit.')
               : (locale === 'zh' ? '短主题优先快速检索，复杂问题使用 AI 规划；不改变其它任务的模型配置。' : 'Short topics use fast search; complex questions use AI planning. Other task model settings are unchanged.')}</p>
         </div>
+        <div className="max-w-4xl mx-auto mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-600 dark:text-gray-300">
+          <label className="inline-flex items-center gap-2">{locale === 'zh' ? '发表时间' : 'Publication period'}
+            <select aria-label={locale === 'zh' ? '发表时间' : 'Publication period'} value={period} disabled={isLoading} onChange={e => setPeriod(e.target.value as SearchPeriod)} className="rounded-lg border border-gray-200 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-900">
+              <option value="all">{locale === 'zh' ? '全部年份' : 'All years'}</option><option value="year">{locale === 'zh' ? '今年至今' : 'Year to date'}</option><option value="three">{locale === 'zh' ? '近三年至今' : 'Last 3 calendar years'}</option><option value="custom">{locale === 'zh' ? '自定义年份' : 'Custom years'}</option>
+            </select>
+          </label>
+          {period === 'custom' && <div className="inline-flex items-center gap-1">
+            <input aria-label={locale === 'zh' ? '开始年份' : 'From year'} type="number" min={1000} max={new Date().getFullYear()} value={fromYear} disabled={isLoading} onChange={e => setFromYear(e.target.value)} className="w-20 rounded border bg-transparent p-1" /> —
+            <input aria-label={locale === 'zh' ? '结束年份' : 'To year'} type="number" min={1000} max={new Date().getFullYear()} value={toYear} disabled={isLoading} onChange={e => setToYear(e.target.value)} className="w-20 rounded border bg-transparent p-1" />
+          </div>}
+          <label className="inline-flex items-center gap-2">{locale === 'zh' ? '笔记研究分类' : 'Note research category'}
+            <input aria-label={locale === 'zh' ? '笔记研究分类' : 'Note research category'} list="research-note-categories" maxLength={100} value={researchCategory} onChange={e => setResearchCategory(e.target.value)} placeholder={locale === 'zh' ? '选择或输入，如交通流修复' : 'Select or enter a category'} className="w-48 rounded-lg border border-gray-200 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-900" />
+            <datalist id="research-note-categories">{noteCategories.map(name => <option key={name} value={name} />)}</datalist>
+          </label>
+          <span className="text-gray-500">{locale === 'zh' ? '时间条件在下次搜索生效；分类在保存笔记时使用。' : 'Dates apply to the next search; category applies when saving notes.'}</span>
+        </div>
       </div>
 
       {isLoading && (
@@ -347,6 +378,11 @@ export default function Search() {
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 overflow-y-auto custom-scrollbar">
           <div className="max-w-4xl mx-auto px-4 py-4">
+            {searchRun?.runtime_metrics?.searched_at && <div className="mb-3 rounded-lg border border-gray-200 dark:border-gray-700 p-3 text-xs text-gray-600 dark:text-gray-300" aria-label={locale === 'zh' ? '文献时效说明' : 'Search freshness'}>
+              <p>{locale === 'zh' ? '本次检索时间：' : 'Search started: '}{new Date(searchRun.runtime_metrics.searched_at).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US')} · {searchRun.runtime_metrics.date_from || (locale === 'zh' ? '不限起始时间' : 'No start date')} → {searchRun.runtime_metrics.date_to || (locale === 'zh' ? '不限结束时间' : 'No end date')}</p>
+              <p className="mt-1">{locale === 'zh' ? searchRun.runtime_metrics.freshness_note || '结果来自各源当前已收录文献，可能存在收录延迟。发表较新不等于创新性更高。' : 'Results reflect records indexed by each source, not exhaustive coverage through today. Indexing and caches can lag; year-only records are approximate. Recency does not establish novelty.'}</p>
+              {locale === 'zh' && <p className="mt-1">发表时间用于判断时效，不是论文创新性评分；创新点仍需结合方法与已有研究核对。</p>}
+            </div>}
             {error && (
               <div className="flex items-start gap-3 p-4 mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg animate-fade-in">
                 <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
@@ -509,6 +545,7 @@ export default function Search() {
               onKeyDown={handleResizeKeyDown}
             />
             <PaperDetailPanel
+              researchCategory={researchCategory} sourceQuery={searchRun?.original_query || query}
               onSelectPaper={handlePaperClick}
               key={selectedPaper.id}
               paper={selectedPaper} analysis={analysis} analysisLoading={analysisLoading}

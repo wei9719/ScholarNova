@@ -114,6 +114,7 @@ class ExpensiveRequestMiddleware:
         path = scope.get("path", "").rstrip("/")
         return (
             path == "/api/v1/agent/chat"
+            or path == "/api/v1/study/draft"
             or path == "/api/v1/recommendations"
             or path.startswith("/api/v1/model/")
             or path == "/api/v1/knowledge"

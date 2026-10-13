@@ -45,7 +45,7 @@ _SEARCH_FIELDS = (
 )
 
 _DETAIL_FIELDS = (
-    "corpusId,title,abstract,authors,year,venue,citationCount,"
+    "corpusId,title,abstract,authors,year,publicationDate,venue,citationCount,"
     "externalIds,openAccessPdf,fieldsOfStudy,references,citations"
 )
 
@@ -246,7 +246,10 @@ class SemanticScholarSource(BaseSource):
     # 搜索
     # ------------------------------------------------------------------
 
-    async def search(self, query: str, max_results: int = 50) -> List[Paper]:
+    async def search(
+        self, query: str, max_results: int = 50, *,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> List[Paper]:
         """
         搜索论文
 
@@ -259,6 +262,8 @@ class SemanticScholarSource(BaseSource):
         """
         normalized_query = re.sub(r"\s+", " ", query.replace("-", " ")).strip()
         cache_key = f"search:{normalized_query.casefold()}:{min(max_results, 100)}"
+        if date_from or date_to:
+            cache_key += f":dates:{date_from or ''}:{date_to or ''}"
         cached = self._read_cache(cache_key)
         if cached is not None:
             self.last_error = None
@@ -270,6 +275,8 @@ class SemanticScholarSource(BaseSource):
             "limit": min(max_results, 100),
             "fields": _SEARCH_FIELDS,
         }
+        if date_from or date_to:
+            params["publicationDateOrYear"] = f"{date_from or ''}:{date_to or ''}"
 
         async with self._cache_lock(cache_key):
             cached = self._read_cache(cache_key)

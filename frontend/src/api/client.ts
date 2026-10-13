@@ -250,8 +250,13 @@ export const agentApi = {
 // 知识库 API
 // =============================================================================
 
+export const studyApi = {
+  draft: (paperId: string, section: import('./types').StudySection, question: string, signal?: AbortSignal) =>
+    api.post<import('./types').StudyDraft>('/study/draft', { paper_id: paperId, section, question: question.trim() || undefined }, { signal, timeout: 75000 }),
+}
+
 export const knowledgeApi = {
-  list: (category?: string, options: { page?: number; page_size?: number; keyword?: string } = {}) =>
+  list: (category?: string, options: { page?: number; page_size?: number; keyword?: string; card_type?: string; source_paper_id?: string } = {}) =>
     api.get<KnowledgeListResponse>('/knowledge', { params: { ...options, ...(category ? { category } : {}) } }),
 
   get: (id: string) =>

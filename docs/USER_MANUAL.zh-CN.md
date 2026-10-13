@@ -6,6 +6,15 @@ ScholarNova 把找论文、阅读整理、知识积累和研究规划放在同�
 
 本阶段不增加一套独立的学习导航，仍然使用“搜索”“知识库”“智能体”和已有研究路线入口。下面按一次真实研究的顺序介绍。想进一步理解底层技术，可另读[项目大白话与开发学习手册](PROJECT_EXPLAINED.zh-CN.md)；该文档是开发学习资料，部分版本说明较早，当前操作以本手册和界面为准。
 
+下面是 1.2.12 的实际界面，内容为隔离测试环境中的示例记录。左图展示资料类型筛选，右图展示笔记章节与公式记录，点击图片可放大查看。
+
+<table>
+<tr>
+<td width="50%" valign="top"><strong>按用途找回资料</strong><br><a href="assets/screenshots/knowledge-types-1.2.12.jpg"><img src="assets/screenshots/knowledge-types-1.2.12.jpg" width="100%" alt="基础知识类型与研究分类筛选"></a></td>
+<td width="50%" valign="top"><strong>按章节持续整理</strong><br><a href="assets/screenshots/reading-note-editor-1.2.12.jpg"><img src="assets/screenshots/reading-note-editor-1.2.12.jpg" width="100%" alt="阅读笔记章节导航与公式记录"></a></td>
+</tr>
+</table>
+
 ## 1. 先准备好模型和材料
 
 打开“设置”，填写自己的模型服务地址、API Key 和该平台实际可用的模型名称，测试后保存。千问、GLM 等是模型，硅基流动、百炼等是提供调用服务的平台；名称相似不表示不同平台的 Key 和模型 ID 可以混用。具体入口见 [API 配置说明](API_PROVIDERS.md)。

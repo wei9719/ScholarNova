@@ -11,6 +11,7 @@ import asyncio
 import csv
 import io
 import json
+import math
 import re
 import time
 from difflib import SequenceMatcher
@@ -148,9 +149,6 @@ def import_ranking_content(content: str, filename: str) -> dict[str, Any]:
         sjr = _parse_quartile(
             _pick(row, "sjr best quartile", "sjr quartile", "best quartile", "sjr分区")
         )
-        if not any((jcr, cas, sjr)):
-            continue
-
         year_value = _pick(row, "year", "data year", "jcr year", "年份", "年度")
         try:
             year = int(float(str(year_value))) if year_value not in (None, "") else None
@@ -161,6 +159,26 @@ def import_ranking_content(content: str, filename: str) -> dict[str, Any]:
             sjr_score = float(str(sjr_value).replace(",", ".")) if sjr_value else None
         except (TypeError, ValueError):
             sjr_score = None
+
+        jif_value = _pick(row, "jif", "journal impact factor", "impact factor", "影响因子")
+        try:
+            jif = float(str(jif_value).replace(",", ".")) if jif_value not in (None, "") else None
+            if jif is not None and (not math.isfinite(jif) or jif < 0):
+                jif = None
+        except (TypeError, ValueError):
+            jif = None
+        jif_year_value = _pick(row, "jif year", "jif年份", "影响因子年份") or year_value
+        try:
+            jif_year = int(float(str(jif_year_value)))
+            if not 1900 <= jif_year <= 2100:
+                jif_year = None
+        except (TypeError, ValueError):
+            jif_year = None
+        # A JIF number without its reporting year is not a usable official metric.
+        if jif_year is None:
+            jif = None
+        if not any((jcr, cas, sjr, jif is not None)):
+            continue
 
         source = _pick(row, "source", "data source", "来源")
         if not source:
@@ -175,12 +193,15 @@ def import_ranking_content(content: str, filename: str) -> dict[str, Any]:
             "partition_year": year,
             "partition_source": str(source),
             "partition_status": "verified_import",
+            "jif": jif,
+            "jif_year": jif_year if jif is not None else None,
+            "jif_source": str(_pick(row, "jif source", "jif来源") or source) if jif is not None else None,
         }
         entries[key] = entry
 
     if not entries:
         raise ValueError(
-            "没有识别到分区记录；至少需要期刊名以及 JCR/CAS/SJR 分区列"
+            "没有识别到分区记录或带年份的 JIF；至少需要期刊名以及 JCR/CAS/SJR 分区，或 JIF 与年份列"
         )
 
     from datetime import datetime, timezone
@@ -195,6 +216,15 @@ def import_ranking_content(content: str, filename: str) -> dict[str, Any]:
     with _DATA_PATH.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
     return ranking_status()
+
+
+def local_journal_record(venue: str, issns: list[str] | None = None) -> dict[str, Any]:
+    """Read an exact licensed import; reject a conflicting ISSN when supplied."""
+    entry = _load_dataset().get("entries", {}).get(normalize_journal_name(venue)) or {}
+    imported_issn = normalize_issn(str(entry.get("issn") or ""))
+    if imported_issn and issns and imported_issn not in {normalize_issn(value) for value in issns}:
+        return {}
+    return dict(entry)
 
 
 def apply_local_ranking(quality: PaperQuality, venue: Optional[str]) -> PaperQuality:

@@ -6,7 +6,7 @@ import { useSearchStore } from '@/stores/searchStore'
 import Search from '../Search'
 
 const api = vi.hoisted(() => ({ create: vi.fn(), getRun: vi.fn(), get: vi.fn(), analyze: vi.fn(), getCategories: vi.fn(), toastError: vi.fn() }))
-const uploadCallback = vi.hoisted(() => ({ current: () => {} }))
+const uploadCallback = vi.hoisted(() => ({ current: (_analyze?: boolean) => {} }))
 const analyzeCallback = vi.hoisted(() => ({ current: () => {} }))
 vi.mock('@/api/client', () => ({
   searchApi: { create: api.create, getRun: api.getRun },
@@ -44,9 +44,10 @@ beforeEach(() => {
   api.create.mockResolvedValue({ data: { run_id: 'run' } })
   api.getRun.mockResolvedValue({ data: { run_id: 'run', status: 'completed', results: [{ id: 'a' }], query: 'traffic' } })
   api.getCategories.mockResolvedValue({ data: [] })
+  delete window.scholarAccess
 })
 
-afterEach(() => { cleanup(); vi.useRealTimers() })
+afterEach(() => { cleanup(); vi.useRealTimers(); delete window.scholarAccess })
 
 it('sends automatic planning for an existing query URL without a mode', async () => {
   render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
@@ -331,6 +332,84 @@ it('cancels a pending analysis when leaving and ignores a late completion', asyn
   await act(async () => { finish({ data: { summary: '过期分析' } }) })
   expect(useSearchStore.getState().analysis).toBeNull()
   expect(useSearchStore.getState().analysisLoading).toBe(false)
+})
+
+function nativeImportListener() {
+  let listener!: (event: { paper_id: string }) => void
+  const unsubscribe = vi.fn()
+  window.scholarAccess = { open: vi.fn(), onImported: vi.fn(callback => { listener = callback; return unsubscribe }) }
+  return { emit: (id: string) => listener({ paper_id: id }), getListener: () => listener, unsubscribe }
+}
+
+it('clears the imported paper analysis and evidence without automatically calling a model', async () => {
+  const native = nativeImportListener()
+  api.get.mockResolvedValue({ data: { id: 'a' } })
+  let finish!: (value: any) => void
+  api.analyze.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  fireEvent.click(await screen.findByText('Paper A'))
+  await screen.findByTestId('detail')
+  fireEvent.click(screen.getByText('Analyze'))
+  const signal = api.analyze.mock.calls[0][2] as AbortSignal
+  act(() => useSearchStore.getState().setEvidenceSpans([{ id: 'old-evidence' } as any]))
+  act(() => native.emit('a'))
+  expect(signal.aborted).toBe(true)
+  expect(screen.getByTestId('busy')).toHaveTextContent('false')
+  expect(useSearchStore.getState().evidenceSpans).toEqual([])
+  await act(async () => finish({ data: { summary: '导入前的旧分析' } }))
+  expect(screen.getByTestId('analysis')).toBeEmptyDOMElement()
+  expect(api.analyze).toHaveBeenCalledTimes(1)
+})
+
+it('invalidates an imported paper cache after switching without disturbing the other paper request', async () => {
+  const native = nativeImportListener()
+  api.get.mockImplementation((id: string) => Promise.resolve({ data: { id } }))
+  let finishB!: (value: any) => void
+  api.analyze.mockReturnValueOnce(Promise.resolve({ data: { summary: 'A 的旧缓存' } }))
+    .mockReturnValueOnce(new Promise(resolve => { finishB = resolve }))
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  fireEvent.click(await screen.findByText('Paper A')); await screen.findByTestId('detail')
+  fireEvent.click(screen.getByText('Analyze')); await screen.findByText('A 的旧缓存')
+  fireEvent.click(screen.getByText('Paper B')); await waitFor(() => expect(screen.getByTestId('detail')).toHaveTextContent('b'))
+  fireEvent.click(screen.getByText('Analyze'))
+  const bSignal = api.analyze.mock.calls[1][2] as AbortSignal
+  act(() => native.emit('a'))
+  expect(bSignal.aborted).toBe(false)
+  expect(screen.getByTestId('busy')).toHaveTextContent('true')
+  await act(async () => finishB({ data: { summary: 'B 的正确结果' } }))
+  expect(screen.getByTestId('analysis')).toHaveTextContent('B 的正确结果')
+  fireEvent.click(screen.getByText('Paper A')); await waitFor(() => expect(screen.getByTestId('detail')).toHaveTextContent('a'))
+  expect(screen.getByTestId('analysis')).toBeEmptyDOMElement()
+  expect(api.analyze).toHaveBeenCalledTimes(2)
+})
+
+it('clears displayed imported material even while the next paper detail is pending', async () => {
+  const native = nativeImportListener()
+  let finishB!: (value: any) => void
+  api.get.mockImplementation((id: string) => id === 'a' ? Promise.resolve({ data: { id } }) : new Promise(resolve => { finishB = resolve }))
+  api.analyze.mockResolvedValue({ data: { summary: 'A 的旧材料' } })
+  render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  fireEvent.click(await screen.findByText('Paper A')); await screen.findByTestId('detail')
+  fireEvent.click(screen.getByText('Analyze')); await screen.findByText('A 的旧材料')
+  fireEvent.click(screen.getByText('Paper B'))
+  expect(screen.getByTestId('detail')).toHaveTextContent('a')
+  act(() => native.emit('a'))
+  expect(screen.getByTestId('analysis')).toBeEmptyDOMElement()
+  await act(async () => finishB({ data: { id: 'b' } }))
+  expect(screen.getByTestId('detail')).toHaveTextContent('b')
+})
+
+it('unsubscribes native import events and ignores an already queued callback after unmount', async () => {
+  const native = nativeImportListener()
+  const view = render(<MemoryRouter initialEntries={['/search?q=traffic']}><Search /></MemoryRouter>)
+  await screen.findByText('Paper A')
+  const queued = native.getListener()
+  view.unmount()
+  useSearchStore.setState({ selectedPaper: { id: 'a' } as any, analysis: { summary: '另一个页面会话' } as any, analysisLoading: true })
+  act(() => queued({ paper_id: 'a' }))
+  expect(native.unsubscribe).toHaveBeenCalledTimes(1)
+  expect(useSearchStore.getState().analysis?.summary).toBe('另一个页面会话')
+  expect(useSearchStore.getState().analysisLoading).toBe(true)
 })
 
 function freezeCalendar() {

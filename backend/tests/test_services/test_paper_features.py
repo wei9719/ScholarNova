@@ -44,7 +44,7 @@ def test_paper_features_cover_sections_tables_and_figures() -> None:
     assert "BM25 | 0.42" in table.content
     section = next(chunk for chunk in first if chunk.kind == "section")
     assert section.page == 2
-    assert section.feature_version == "pdf-parser-chunker-v2"
+    assert section.feature_version == "pdf-parser-chunker-v3"
 
 
 def test_paper_features_fall_back_to_full_text() -> None:
@@ -60,3 +60,18 @@ def test_paper_features_fall_back_to_full_text() -> None:
     assert chunks
     assert all(chunk.kind == "fulltext" for chunk in chunks)
     assert {chunk.page for chunk in chunks} == {1, 2}
+
+
+def test_recognized_abstract_does_not_hide_unrecognized_pages() -> None:
+    paper = PaperEntity(id="page-coverage", title="Page coverage", source="test")
+    parsed = ParsedDocument(
+        title="Page coverage", abstract="An extracted abstract.",
+        sections=[DocumentSection(heading="Introduction", level=1,
+                                  text="Coarse section spanning two pages.",
+                                  paragraph_index=1, page_start=1, page_end=2)],
+        full_text="[Page 1]\nIntroduction material.\n\n[Page 2]\nUnrecognized critical formula and result.",
+    )
+    chunks = build_paper_chunks(paper, parsed)
+    assert {chunk.page for chunk in chunks if chunk.kind == "fulltext"} == {1, 2}
+    assert any("critical formula" in chunk.content and chunk.page == 2 for chunk in chunks)
+    assert not any(chunk.kind == "section" for chunk in chunks)

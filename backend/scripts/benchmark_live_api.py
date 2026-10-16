@@ -115,7 +115,7 @@ async def run(args):
             try:
                 text = await asyncio.wait_for(gateway.chat(
                     messages=[{"role": "user", "content": prompt}], temperature=0,
-                    max_tokens=128, _max_retries=0, **_request_options(profile["provider"]),
+                    max_tokens=128, _max_retries=0, **_request_options(profile["provider"], profile["model"]),
                 ), timeout=45)
                 result.update(transport_success=True, content_check=validate_case(name, text), response=text[:1200], finish_reason=gateway.finish_reason)
             except Exception as exc:

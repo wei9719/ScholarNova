@@ -115,9 +115,9 @@ def fake_provider(benchmark, monkeypatch, tmp_path):
         async def _discard_openai_client(self):
             self.closed = True
 
-    def request_options(provider):
+    def request_options(provider, model=""):
         if provider == "siliconflow":
-            return {"extra_body": {"enable_thinking": False}}
+            return {} if "instruct" in model.casefold() else {"extra_body": {"enable_thinking": False}}
         return {"extra_body": {"thinking": {"type": "disabled"}}}
 
     config = SimpleNamespace(get_model_for_task=lambda _task: dict(profile))
@@ -170,6 +170,14 @@ async def test_twelve_requests_are_bounded_and_each_has_no_retry_or_fallback(ben
     public_output = fake_provider.args.output.read_text(encoding="utf-8") + capsys.readouterr().out
     assert "FAKE_CREDENTIAL_NEVER_LOG" not in public_output
     assert "api_key" not in public_output
+
+
+async def test_instruct_profiles_do_not_receive_unsupported_thinking(benchmark, fake_provider):
+    fake_provider.profile["model"] = "Qwen/Qwen3-VL-8B-Instruct"
+    await benchmark.run(fake_provider.args)
+
+    assert len(fake_provider.state.calls) == 12
+    assert all("extra_body" not in call and call["_max_retries"] == 0 for call in fake_provider.state.calls)
 
 
 async def test_extra_cases_do_not_raise_the_fixed_twelve_request_cap(benchmark, fake_provider, monkeypatch):

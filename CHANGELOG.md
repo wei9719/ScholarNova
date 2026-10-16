@@ -4,6 +4,18 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.13 source — journal discovery and page-anchored guided reading
+
+- Add user-triggered journal discovery alongside search results. Verify journal type, OpenAlex Source ID and ISSN; distinguish confirmed journals from unverified candidate publication sources. Preserve current-result/discovery-sample denominators and persist same-journal papers before exposing actionable IDs.
+- Keep metric names, reporting years and provenance separate. Accept a locally licensed JIF value only with its year; OpenAlex H-index and two-year citedness are never relabelled as JIF/JCR. Offer homepage/author-guide leads without inventing guide URLs, plus reviewed writing-reference drafts in the existing skill library.
+- Add isolated institutional/public desktop browser sessions. Institutional access is direct within that session; public pages use system networking. Users perform authentication, detect or download a PDF, inspect its binding/identity information and confirm import. Import saves and parses locally without automatically calling a cloud model; incompatible websites retain external-browser/manual-PDF import.
+- Separate unprivileged remote pages from the local toolbar and application bridge, restrict network targets and concurrent windows, bound downloads by size/time, and clean transient downloads. Invalidate per-paper analysis after authorized import, ignore late detail updates, and close the application consistently when its main window closes.
+- Add `/assistant?paper=...` for local PDF reading with verified page/version references and seven explicit tasks: passage translation, paragraph/equation/figure interpretation, prerequisites with exercises, writing samples and further-reading guidance. Selected passages must belong to the requested page; scans have no automatic OCR, and visual tasks require a configured image-capable Vision model.
+- Compare 2–5 locally available full-text writing samples using bounded first/second/last-page excerpts, preserving paper/page/version sources. Distinguish sample observations, teaching suggestions and personal notes; review before saving a skill card. Neither sample patterns nor reading recommendations establish journal-wide rules or user mastery.
+- Update both READMEs and the Chinese manual, retaining the 1.2.12 illustrated Word guide with an explicit version note. See the [1.2.13 workflow and manual checks](docs/releases/v1.2.13-guided-reading.zh-CN.md).
+
+This describes source capabilities, not acceptance of every institutional subscription or completion of a new macOS build. Published installers and their verification are determined by the actual same-version Release assets and release records.
+
 ### 1.2.12 source — current literature and a personal research notebook
 
 - Send publication-date ranges to scholarly sources, retain precise dates, and replace fixed-year ranking with the current calendar year. Expose search time, date range and indexing/cache limitations; publication recency is not a novelty score.

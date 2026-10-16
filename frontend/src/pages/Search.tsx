@@ -14,6 +14,9 @@ import QueryPlan from '@/components/QueryPlan/QueryPlan'
 import SearchInsights from '@/components/SearchInsights/SearchInsights'
 import ResultsList from '@/components/ResultsList/ResultsList'
 import PaperDetailPanel from '@/components/PaperDetail/PaperDetail'
+import JournalDiscovery from '@/components/JournalDiscovery/JournalDiscovery'
+import { openAcademicAccess } from '@/api/accessClient'
+import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { PaperCardSkeleton } from '@/components/Skeleton'
 import toast from 'react-hot-toast'
 import './Search.css'
@@ -60,6 +63,19 @@ export default function Search() {
   const generationRef = useRef(0)
   const selectionRef = useRef(0)
   const [searchHistory, setSearchHistory] = useState<ReturnType<typeof getSearchHistory>>(() => getSearchHistory())
+  useEffect(() => {
+    let active = true
+    const unsubscribe = window.scholarAccess?.onImported(({ paper_id }) => {
+      if (!active) return
+      analysisCacheRef.current.delete(paper_id)
+      analysisRequestsRef.current.get(paper_id)?.abort()
+      analysisRequestsRef.current.delete(paper_id)
+      if (useSearchStore.getState().selectedPaper?.id === paper_id) {
+        setAnalysis(null); setAnalysisLoading(false); setEvidenceSpans([])
+      }
+    })
+    return () => { active = false; unsubscribe?.() }
+  }, [setAnalysis, setAnalysisLoading, setEvidenceSpans])
 
   // A late request must never repopulate a closed or replaced search session.
   useEffect(() => {
@@ -265,16 +281,18 @@ export default function Search() {
     }
   }, [selectedPaper, query, renderedGeneration, renderedSelection])
 
-  const handleFulltextUploaded = useCallback(() => {
+  const handleFulltextUploaded = useCallback((analyze = true) => {
     if (!selectedPaper || renderedGeneration !== generationRef.current) return
     const paperId = selectedPaper.id
     // Uploads may finish after this paper's detail panel has been closed or replaced.
     analysisCacheRef.current.delete(paperId)
     analysisRequestsRef.current.get(paperId)?.abort()
     analysisRequestsRef.current.delete(paperId)
-    if (selectedPaperIdRef.current !== paperId || useSearchStore.getState().selectedPaper?.id !== paperId) return
+    if (useSearchStore.getState().selectedPaper?.id !== paperId) return
     setAnalysis(null)
-    void handleAnalyze(undefined, true)
+    setEvidenceSpans([])
+    if (analyze && selectedPaperIdRef.current === paperId) void handleAnalyze(undefined, true)
+    else setAnalysisLoading(false)
   }, [selectedPaper, handleAnalyze, renderedGeneration])
 
   const beginPanelResize = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -297,14 +315,22 @@ export default function Search() {
     if (!activeQuery) return
     try {
       const { data } = await networkApi.libraryLink(activeQuery)
-      await navigator.clipboard.writeText(data.query)
-      window.open(data.url, '_blank', 'noopener,noreferrer')
+      await navigator.clipboard.writeText(data.query).catch(() => {})
+      const mode = await openAcademicAccess({ url: data.url, channel: 'campus' })
       toast.success(locale === 'zh'
-        ? '检索词已复制，请在图书馆页面登录后粘贴检索'
+        ? mode === 'desktop' ? '已打开校园直连窗口，检索词已复制；请完成学校登录后检索' : '已打开图书馆，请登录检索，下载后手动导入 PDF'
         : 'Query copied. Sign in to the library portal and paste it to search.')
     } catch {
       toast.error(locale === 'zh' ? '无法打开图书馆入口' : 'Unable to open library portal')
     }
+  }
+
+  const handleScholarSearch = async () => {
+    const activeQuery = (queryParam || query).trim()
+    if (!activeQuery) { toast.error('请先输入研究关键词'); return }
+    try {
+      await openAcademicAccess({ url: `https://scholar.google.com/scholar?q=${encodeURIComponent(activeQuery)}`, channel: 'public' })
+    } catch (error) { toast.error(safeErrorMessage(error, '无法打开 Google Scholar，请检查网络')) }
   }
 
   const handleCloseDetail = () => {
@@ -324,7 +350,7 @@ export default function Search() {
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col">
       <div className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-4 py-3">
-        <div className="max-w-4xl mx-auto flex items-center gap-2">
+        <div className="max-w-4xl mx-auto flex flex-wrap items-center gap-2">
           <div className="flex-1">
             <SearchBar key={queryParam} defaultValue={queryParam || query} size="sm" loading={isLoading} onSubmit={handleSearch} />
           </div>
@@ -332,9 +358,13 @@ export default function Search() {
             className="hidden sm:inline-flex items-center gap-1.5 px-3 h-10 rounded-xl border border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-300 hover:border-primary-400 hover:text-primary-600 transition-colors"
             title={locale === 'zh' ? '复制检索词并打开学校图书馆' : 'Copy query and open the library portal'}>
             <ExternalLink className="w-3.5 h-3.5" />
-            {locale === 'zh' ? '图书馆馆藏' : 'Library'}
+            {locale === 'zh' ? '校园与机构资源' : 'Institutional access'}
+          </button>
+          <button type="button" onClick={handleScholarSearch} className="inline-flex items-center gap-1.5 px-3 h-10 rounded-xl border border-gray-200 dark:border-gray-700 text-xs" title="由你主动浏览，不进行后台批量抓取">
+            <ExternalLink className="w-3.5 h-3.5" />Google Scholar
           </button>
         </div>
+        <p className="max-w-4xl mx-auto mt-2 text-xs text-gray-500">{locale === 'zh' ? '搜索按钮使用公共学术 API；校园资源在独立授权窗口直连，公共网页沿用系统网络。需要订阅权限时使用校园通道，不自动切换系统 VPN。' : 'Search uses scholarly APIs. Institutional access uses an isolated direct session; public browsing uses system networking. System VPN settings are not changed.'}</p>
         <div className="max-w-4xl mx-auto mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
           <label className="inline-flex items-center gap-2">
             {locale === 'zh' ? '检索规划' : 'Search planning'}
@@ -465,6 +495,16 @@ export default function Search() {
             {searchRun?.status === 'completed' && (
               <SearchInsights run={searchRun} />
             )}
+            {searchRun?.status === 'completed' && <JournalDiscovery
+              key={renderedGeneration} query={searchRun.original_query || queryParam || query || ''} papers={searchRun.results}
+              category={researchCategory} dateFrom={searchRun.runtime_metrics?.date_from || undefined} dateTo={searchRun.runtime_metrics?.date_to || undefined}
+              onSelectPaper={handlePaperClick}
+              onCreateWritingDraft={draft => {
+                const store = useKnowledgeStore.getState()
+                store.setEditingItem(null); store.setFormPrefill(draft); store.setFormOpen(true)
+                navigate('/knowledge')
+              }}
+            />}
 
             {/* 搜索结果 */}
             {searchRun && (!isLoading || searchRun.results.length > 0) && (

@@ -163,7 +163,7 @@ test('IPC controls reject other windows before constructing or touching a local 
   let made = 0
   const run = loadMain({ localModel: { createLocalModelManager: () => { made += 1; return fakeManager() } } })
   run.setWindow(run.window)
-  assert.equal(run.handlers.size, 3)
+  assert.equal([...run.handlers.keys()].filter(key => key.startsWith('scholarnova:local-model:')).length, 3)
   for (const action of ['status', 'start', 'stop']) {
     const result = await run.handlers.get(`scholarnova:local-model:${action}`)({ sender: {} })
     assert.equal(result.status, 'error')
@@ -200,19 +200,29 @@ test('a failed owned-process stop cannot lead to a second local-model process', 
   assert.equal(made, 1)
 })
 
-test('preload exposes only argument-free status, start and stop functions', async () => {
+test('local-model preload remains argument-free alongside a separate access bridge', async () => {
   const calls = []
-  let exposed
+  const bridges = new Map()
   const context = vm.createContext({ require: name => {
     assert.equal(name, 'electron')
     return {
-      contextBridge: { exposeInMainWorld: (name, api) => { exposed = { name, api } } },
+      contextBridge: { exposeInMainWorld: (name, api) => bridges.set(name, api) },
       ipcRenderer: { invoke: async (...args) => { calls.push(args); return { status: 'stopped' } } },
     }
   } })
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'preload.cjs'), 'utf8'), context)
-  assert.equal(exposed.name, 'scholarLocalModel')
-  assert.deepEqual(Object.keys(exposed.api).sort(), ['start', 'status', 'stop'])
-  for (const action of ['status', 'start', 'stop']) await exposed.api[action]({ path: 'untrusted', token: 'untrusted' })
+  const api = bridges.get('scholarLocalModel')
+  assert.deepEqual(Object.keys(api).sort(), ['start', 'status', 'stop'])
+  assert.deepEqual(Object.keys(bridges.get('scholarAccess')).sort(), ['onImported', 'open'])
+  for (const action of ['status', 'start', 'stop']) await api[action]({ path: 'untrusted', token: 'untrusted' })
   assert.deepEqual(calls, ['status', 'start', 'stop'].map(action => [`scholarnova:local-model:${action}`]))
+})
+
+test('access opening rejects other webContents and subframes', async () => {
+  const run = loadMain()
+  run.setWindow(run.window)
+  for (const event of [{ sender: {} }, { sender: run.window.webContents, senderFrame: {} }]) {
+    const result = await run.handlers.get('scholarnova:access:open')(event, { url: 'https://example.org' })
+    assert.ok(result.error)
+  }
 })

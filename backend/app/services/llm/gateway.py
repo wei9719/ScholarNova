@@ -259,10 +259,11 @@ class LLMGateway:
                 # GLM reasoning models can spend a tiny probe's whole token
                 # budget on hidden reasoning and return an empty final answer.
                 request_options["extra_body"] = {"thinking": {"type": "disabled"}}
-            elif self.provider == "siliconflow":
+            elif self.provider == "siliconflow" and "instruct" not in str(self._model_name or settings.OPENAI_DEFAULT_MODEL or "").casefold():
                 # Qwen3 enables reasoning by default on SiliconFlow. A tiny
                 # connection probe should verify connectivity, not spend its
-                # entire budget on hidden reasoning tokens.
+                # entire budget on hidden reasoning tokens. Explicit Instruct
+                # models reject this parameter and must not receive it.
                 request_options["extra_body"] = {"enable_thinking": False}
             if self.provider in {
                 "openai",

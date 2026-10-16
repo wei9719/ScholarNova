@@ -10,6 +10,7 @@ PDF 全文获取器
 5. PubMed Central（生物医学）
 """
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -17,10 +18,11 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
+from app.core.ssrf import validate_url
 from app.services.sources.semantic_scholar import SemanticScholarSource
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,40 @@ UNPAYWALL_API = "https://api.unpaywall.org/v2"
 OPENALEX_API = "https://api.openalex.org/works"
 CROSSREF_API = "https://api.crossref.org/works"
 USER_AGENT = "ScholarNova/1.2.0 (+https://github.com/zhangweiguo9719-web/ScholarNova)"
+
+
+async def _pdf_bytes(client: httpx.AsyncClient, url: str) -> bytes:
+    """Validate each hop before sending a request; never log signed URLs."""
+    current = url
+    for hop in range(6):
+        parsed = urlparse(current)
+        if parsed.username or parsed.password:
+            raise ValueError("PDF 地址不能包含账号密码")
+        valid, reason = await asyncio.to_thread(validate_url, current)
+        if not valid:
+            raise ValueError(reason or "PDF 地址不安全")
+        async with client.stream("GET", current) as response:
+            if response.is_redirect:
+                location = response.headers.get("location")
+                if not location or hop == 5:
+                    raise ValueError("PDF 下载重定向过多或缺少目标地址")
+                current = urljoin(current, location)
+                continue
+            response.raise_for_status()
+            declared = int(response.headers.get("content-length") or 0)
+            if declared > MAX_FILE_SIZE:
+                raise ValueError("PDF 不能超过 50 MB")
+            chunks, size = [], 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_FILE_SIZE:
+                    raise ValueError("PDF 不能超过 50 MB")
+                chunks.append(chunk)
+            content = b"".join(chunks)
+            if not content.startswith(b"%PDF-"):
+                raise ValueError("返回内容不是 PDF，请通过机构授权获取或手动导入")
+            return content
+    raise ValueError("PDF 下载重定向过多")
 
 # arXiv PDF 基础 URL
 ARXIV_PDF_BASE = "https://arxiv.org/pdf"
@@ -252,52 +288,15 @@ class PDFFetcher:
             )
         try:
             async with httpx.AsyncClient(
-                follow_redirects=True,
+                follow_redirects=False,
                 timeout=DOWNLOAD_TIMEOUT,
                 headers={"User-Agent": USER_AGENT, "Accept": "application/pdf,*/*;q=0.8"},
             ) as client:
-                # 某些论文站点拒绝 HEAD 但允许 GET，因此直接流式下载并限制大小。
-                async with client.stream("GET", url) as resp:
-                    resp.raise_for_status()
-                    declared_size = int(resp.headers.get("content-length") or 0)
-                    if declared_size > MAX_FILE_SIZE:
-                        self._failed_urls.add(url)
-                        return FetchResult(
-                            success=False,
-                            source=source,
-                            url=url,
-                            error=f"File too large: {declared_size} bytes",
-                        )
-                    chunks: list[bytes] = []
-                    received = 0
-                    async for chunk in resp.aiter_bytes():
-                        received += len(chunk)
-                        if received > MAX_FILE_SIZE:
-                            self._failed_urls.add(url)
-                            return FetchResult(
-                                success=False,
-                                source=source,
-                                url=url,
-                                error=f"File too large: over {MAX_FILE_SIZE} bytes",
-                            )
-                        chunks.append(chunk)
-                    content = b"".join(chunks)
-
-                if not self._is_pdf_content(content):
-                    self._failed_urls.add(url)
-                    content_type = resp.headers.get("content-type", "unknown")
-                    return FetchResult(
-                        success=False,
-                        source=source,
-                        url=url,
-                        error=f"返回内容不是 PDF（Content-Type={content_type}）",
-                    )
+                content = await _pdf_bytes(client, url)
 
                 # 保存到缓存
                 pdf_path = self._save_to_cache(cache_key, content)
-                logger.info(
-                    f"Downloaded PDF from {source}: {url} -> {pdf_path}"
-                )
+                logger.info("Downloaded PDF from %s", source)
                 return FetchResult(
                     success=True,
                     pdf_path=pdf_path,
@@ -308,15 +307,16 @@ class PDFFetcher:
 
         except httpx.TimeoutException:
             self._failed_urls.add(url)
-            logger.warning(f"Timeout downloading PDF from {url}")
+            logger.warning("PDF download timed out (%s)", source)
             return FetchResult(
                 success=False, source=source, url=url, error="Download timeout"
             )
         except Exception as e:
             self._failed_urls.add(url)
-            logger.warning(f"Error downloading PDF from {url}: {e}")
+            logger.warning("PDF download failed (%s, %s)", source, type(e).__name__)
             return FetchResult(
-                success=False, source=source, url=url, error=str(e)
+                success=False, source=source, url=url,
+                error=str(e) if isinstance(e, ValueError) else "PDF 下载失败，请检查访问权限或手动导入",
             )
 
     # ------------------------------------------------------------------

@@ -8,6 +8,7 @@ const { randomBytes } = require('crypto')
 const { safeExternalUrl, resolveStaticPath } = require('./security.cjs')
 const { proxyToBackend } = require('./proxy.cjs')
 const { createLocalModelManager } = require('./local-model.cjs')
+const { createAccessBrowser } = require('./access-browser.cjs')
 
 let mainWindow = null
 let backendProcess = null
@@ -18,6 +19,7 @@ let localModelManager = null
 let localModelStopPending = false
 let localModelStopFinished = false
 let localModelOperation = Promise.resolve()
+let accessBrowser = null
 const MAX_BACKEND_RESTARTS = 5
 // Never exposed to the renderer or written to the user's settings.
 const backendSessionToken = randomBytes(32).toString('hex')
@@ -58,6 +60,17 @@ function registerLocalModelHandlers() {
       return action === 'status' ? localModelStatus() : controlLocalModel(action)
     })
   }
+}
+
+function registerAccessHandlers() {
+  ipcMain.handle('scholarnova:access:open', async (event, request) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents ||
+        event.senderFrame !== mainWindow.webContents.mainFrame || !accessBrowser) {
+      return { error: '只能从 ScholarNova 主窗口打开授权页面' }
+    }
+    try { return await accessBrowser.open(request) }
+    catch (error) { return { error: error.message || '无法打开授权浏览器' } }
+  })
 }
 
 const isPackaged = app.isPackaged
@@ -310,6 +323,7 @@ async function createWindow(uiPort) {
     if (safeExternalUrl(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
+  mainWindow.on?.('closed', () => { mainWindow = null; app.quit() })
   const origin = `http://127.0.0.1:${uiPort}`
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (new URL(url).origin !== origin) {
@@ -358,6 +372,43 @@ async function bootstrap() {
   startBackend(backendPort)
   await waitForBackend(backendPort)
   await startStaticServer(uiPort, backendPort)
+  const backendUrl = `http://127.0.0.1:${backendPort}/api/v1`
+  accessBrowser = createAccessBrowser({
+    electron: require('electron'), userData: app.getPath('userData'),
+    getPaper: async id => {
+      if (typeof id !== 'string' || id.length > 200) throw new Error('论文标识无效')
+      const response = await fetch(`${backendUrl}/papers/${encodeURIComponent(id)}`, {
+        headers: { 'x-scholarnova-session': backendSessionToken }, signal: AbortSignal.timeout(10000),
+      })
+      if (!response.ok) throw new Error('请先在搜索结果中选择已保存的论文')
+      const paper = await response.json()
+      return { id: paper.id, title: paper.title }
+    },
+    importPdf: async (id, bytes) => {
+      const form = new FormData()
+      form.append('file', new Blob([bytes], { type: 'application/pdf' }), 'authorized-paper.pdf')
+      const response = await fetch(`${backendUrl}/papers/${encodeURIComponent(id)}/fulltext`, {
+        method: 'POST', body: form, headers: { 'x-scholarnova-session': backendSessionToken },
+        signal: AbortSignal.timeout(90000),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'PDF 导入失败')
+      return result
+    },
+    inspectPdf: async (id, bytes) => {
+      const form = new FormData()
+      form.append('file', new Blob([bytes], { type: 'application/pdf' }), 'authorized-paper.pdf')
+      const response = await fetch(`${backendUrl}/papers/${encodeURIComponent(id)}/fulltext/inspect`, {
+        method: 'POST', body: form, headers: { 'x-scholarnova-session': backendSessionToken },
+        signal: AbortSignal.timeout(30000),
+      })
+      if (!response.ok) throw new Error('PDF 身份预览未完成，请使用手动导入并核对文件')
+      return response.json()
+    },
+    onImported: paperId => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('scholarnova:access:imported', { paper_id: paperId })
+    },
+  })
   await createWindow(uiPort)
 }
 
@@ -366,6 +417,7 @@ if (!gotLock) {
   app.quit()
 } else {
   registerLocalModelHandlers()
+  registerAccessHandlers()
   app.on('second-instance', showMainWindow)
 
   app.whenReady().then(() => {

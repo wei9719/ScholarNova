@@ -1,0 +1,35 @@
+.journal-discovery { border: 1px solid var(--border-color, #d9dfe7); border-radius: 16px; padding: 20px; margin: 20px 0; background: var(--card-bg, #fff); color: var(--text-primary, #17243b); font-size: 14px; line-height: 1.65; }
+.journal-discovery__header, .journal-discovery__title, .journal-discovery__actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.journal-discovery__header { justify-content: space-between; }
+.journal-discovery h3 { margin: 0; display: flex; gap: 8px; align-items: center; font-size: 17px; font-weight: 650; }
+.journal-discovery h4 { margin: 0; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+.journal-discovery p { margin: 8px 0; }
+.journal-discovery button, .journal-discovery a { color: var(--primary-color, #245283); text-align: left; }
+.journal-discovery button { display: inline-flex; gap: 5px; align-items: center; }
+.journal-discovery button:hover, .journal-discovery a:hover { text-decoration: underline; }
+.journal-discovery button:disabled { opacity: .5; cursor: wait; }
+.journal-discovery button:focus-visible, .journal-discovery a:focus-visible { outline: 2px solid #4379b4; outline-offset: 4px; border-radius: 3px; }
+.journal-discovery__muted, .journal-discovery small { color: var(--text-secondary, #5a6981); font-size: 12px; }
+.journal-discovery__warning { color: #946313; font-size: 12px; }
+.journal-discovery__list { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 24px; }
+.journal-discovery__list[hidden] { display: none; }
+.journal-discovery__list article { border-top: 1px solid var(--border-color, #d9dfe7); padding: 16px 0; }
+.journal-discovery__title span { color: #237763; font-size: 11px; white-space: nowrap; }
+.journal-discovery__title .journal-discovery__pending { color: #946313; }
+.journal-discovery__metrics { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
+.journal-discovery__metrics > div { border-left: 2px solid var(--border-color, #d9dfe7); padding-left: 10px; max-width: 360px; }
+.journal-discovery__metrics strong, .journal-discovery__metrics small { display: block; }
+.journal-discovery__metrics strong { font-size: 12px; }
+.journal-discovery__metrics a, .journal-discovery__actions { font-size: 12px; }
+.journal-discovery__actions a { display: inline-flex; gap: 4px; align-items: center; }
+.journal-discovery__papers { padding-top: 14px; border-top: 1px solid var(--border-color, #d9dfe7); }
+.journal-discovery__paper { padding: 10px 0; }
+.journal-discovery__paper small { display: block; }
+.dark .journal-discovery { background: #101b2b; color: #e2e8f0; border-color: #304059; }
+.dark .journal-discovery__muted, .dark .journal-discovery small { color: #a2b0c5; }
+.dark .journal-discovery button, .dark .journal-discovery a { color: #a1c4ee; }
+.dark .journal-discovery__warning, .dark .journal-discovery__title .journal-discovery__pending { color: #e2b75d; }
+.dark .journal-discovery__title span { color: #6dd2b4; }
+.dark .journal-discovery__list article, .dark .journal-discovery__papers, .dark .journal-discovery__metrics > div { border-color: #304059; }
+@media (max-width: 600px) { .journal-discovery { padding: 14px; } .journal-discovery__metrics { display: block; } .journal-discovery__metrics > div { margin-bottom: 10px; max-width: none; } }
+@media (min-width: 900px) { .journal-discovery__list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -1,0 +1,234 @@
+"""User-selected writing examples remain bounded, traceable sample observations."""
+
+import hashlib
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+import pytest_asyncio
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
+
+from app.api.v1.reader import router
+from app.database import get_db
+from app.models.knowledge import KnowledgeBase
+from app.models.paper import PaperEntity
+from app.services.inference import AllModelsUnavailableError, ModelAttempt
+from app.services.pdf.parser import run_pdf_work
+
+
+def _write_sample(path, name, blank=False):
+    import pymupdf
+
+    with pymupdf.open() as pdf:
+        for heading in ("Abstract", "Conclusion"):
+            page = pdf.new_page()
+            if not blank:
+                page.insert_textbox(pymupdf.Rect(40, 40, 540, 740), heading + "\n" + (
+                    f"{name} studies missing traffic speed observations. The approach separates observed values "
+                    "from evaluation targets and compares reconstruction errors. Methods, findings and scope "
+                    "are explained with explicit assumptions. "
+                ) * 5, fontsize=11)
+        pdf.save(path)
+
+
+@pytest.fixture(autouse=True)
+def isolate_rate_limit(monkeypatch):
+    from app.core.rate_limiter import RateLimiter
+
+    monkeypatch.setattr("app.core.rate_limiter._rate_limiter", RateLimiter())
+
+
+@pytest_asyncio.fixture
+async def samples_client(db_session):
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1/reader")
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+
+
+@pytest_asyncio.fixture
+async def local_samples(db_session):
+    from app.api.v1.analysis import _uploaded_pdf_path
+
+    records = []
+    for index, name in enumerate(("Sample Alpha", "Sample Beta")):
+        paper = PaperEntity(id=f"writing-{index}", title=name, source="test", year=2025,
+                            venue=f"Journal {index}")
+        db_session.add(paper)
+        records.append(paper)
+    await db_session.commit()
+    result = []
+    for paper in records:
+        path = _uploaded_pdf_path(paper.id)
+        await run_pdf_work(_write_sample, path, paper.title)
+        result.append({"id": paper.id, "path": path,
+                       "hash": hashlib.sha256(path.read_bytes()).hexdigest()})
+    return result
+
+
+def _result(source="两个样本都先交代研究对象再说明方法 [S1][S3]。"):
+    return SimpleNamespace(
+        content=json.dumps({"source_notes": source, "teaching_notes": "填写骨架：问题—方法—结果—范围。",
+                            "exercise": "写四句话，再检查每句承担什么功能。"}, ensure_ascii=False),
+        profile={"provider": "test", "model": "sample-model"},
+        usage={"total_tokens": 99, "request_attempts": 1}, attempts=(), fallback_used=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_library_only_lists_local_material_without_parsing(samples_client, local_samples, monkeypatch, db_session):
+    db_session.add(PaperEntity(id="not-local", title="No PDF", source="test"))
+    await db_session.commit()
+    pdf = AsyncMock()
+    monkeypatch.setattr("app.services.reader.run_pdf_work", pdf)
+    fetch = AsyncMock()
+    monkeypatch.setattr("app.services.pdf.fetcher.PDFFetcher.fetch", fetch)
+    response = await samples_client.get("/api/v1/reader/library")
+    assert response.status_code == 200
+    data = response.json()
+    assert {paper["paper_id"] for paper in data["papers"]} == {item["id"] for item in local_samples}
+    assert data["limit"] == 50
+    assert all(paper["source"] == "uploaded" for paper in data["papers"])
+    assert str(local_samples[0]["path"]) not in response.text
+    pdf.assert_not_called()
+    fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_library_cap_and_registered_route(client, local_samples, db_session):
+    from app.api.v1.analysis import _uploaded_pdf_path
+
+    content = local_samples[0]["path"].read_bytes()
+    for index in range(55):
+        paper_id = f"library-cap-{index}"
+        db_session.add(PaperEntity(id=paper_id, title=f"Local sample {index}", source="test"))
+        _uploaded_pdf_path(paper_id).write_bytes(content)
+    await db_session.commit()
+    response = await client.get("/api/v1/reader/library")
+    assert response.status_code == 200
+    assert len(response.json()["papers"]) == 50
+
+
+def test_writing_route_uses_shared_ai_capacity():
+    from app.core.capacity import ExpensiveRequestMiddleware
+
+    assert ExpensiveRequestMiddleware.applies({
+        "type": "http", "method": "POST", "path": "/api/v1/reader/samples/writing",
+    })
+    assert not ExpensiveRequestMiddleware.applies({
+        "type": "http", "method": "GET", "path": "/api/v1/reader/library",
+    })
+
+
+@pytest.mark.asyncio
+async def test_comparison_is_one_bounded_call_with_page_hashes(samples_client, local_samples, monkeypatch, db_session):
+    chat = AsyncMock(return_value=_result())
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    response = await samples_client.post("/api/v1/reader/samples/writing", json={
+        "paper_ids": [item["id"] for item in local_samples], "question": "比较摘要如何引出方法。",
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model_completed"] is True
+    assert data["total_tokens"] == 99
+    assert len(data["sources"]) == 4
+    assert {source["paper_id"] for source in data["sources"]} == {item["id"] for item in local_samples}
+    for source in data["sources"]:
+        paper = next(item for item in local_samples if item["id"] == source["paper_id"])
+        assert source["content_hash"] == paper["hash"]
+        assert source["page_number"] in {1, 2}
+        assert len(source["excerpt"]) <= 1600
+    assert any("不同" in warning and "同一期刊" in warning for warning in data["warnings"])
+    assert any("官方作者指南尚未核对" in warning for warning in data["warnings"])
+    chat.assert_awaited_once()
+    call = chat.call_args.kwargs
+    assert call["task"] == "assistant"
+    assert len(call["messages"][1]["content"]) <= 36_000
+    assert "不可信资料" in call["messages"][0]["content"]
+    assert "必须至少分别引用两篇不同论文" in call["messages"][1]["content"]
+    assert "第一篇 [S1] 与第二篇 [S3]" in call["messages"][1]["content"]
+    assert '"source_notes"' in call["messages"][1]["content"]
+    assert "只写 S1、S4" in call["messages"][1]["content"]
+    assert (await db_session.execute(select(func.count(KnowledgeBase.id)))).scalar_one() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {"paper_ids": ["one"]},
+    {"paper_ids": ["a", "b", "c", "d", "e", "f"]},
+    {"paper_ids": ["a", "a"]},
+    {"paper_ids": ["a", " b", "b"]},
+    {"paper_ids": ["a", "b"], "question": "x" * 2001},
+    {"paper_ids": ["a", "b"], "content_hashes": {"a": "bad-hash"}},
+    {"paper_ids": ["a", "b"], "content_hashes": {"other": "0" * 64}},
+])
+async def test_sample_inputs_are_bounded(samples_client, payload, monkeypatch):
+    chat = AsyncMock()
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    response = await samples_client.post("/api/v1/reader/samples/writing", json=payload)
+    assert response.status_code == 422
+    chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_requested_stale_version_is_rejected(samples_client, local_samples, monkeypatch):
+    chat = AsyncMock()
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    response = await samples_client.post("/api/v1/reader/samples/writing", json={
+        "paper_ids": [item["id"] for item in local_samples],
+        "content_hashes": {local_samples[0]["id"]: "0" * 64},
+    })
+    assert response.status_code == 409
+    chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scanned_samples_reject_without_fake_ocr(samples_client, local_samples, monkeypatch):
+    await run_pdf_work(_write_sample, local_samples[0]["path"], "blank", True)
+    chat = AsyncMock()
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    response = await samples_client.post("/api/v1/reader/samples/writing", json={
+        "paper_ids": [item["id"] for item in local_samples],
+    })
+    assert response.status_code == 422
+    assert "未执行 OCR" in response.text
+    chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["不在范围的引用 [S99]", "只引用了同一篇的两页 [S1][S2]", "混入未给出的来源 [S1][S3][P99]"])
+async def test_citations_must_cover_two_selected_papers(samples_client, local_samples, monkeypatch, source):
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", AsyncMock(return_value=_result(source)))
+    response = await samples_client.post("/api/v1/reader/samples/writing", json={
+        "paper_ids": [item["id"] for item in local_samples],
+    })
+    data = response.json()
+    assert data["model_completed"] is False
+    assert data["source_notes"] == ""
+    assert "未核验" in data["teaching_notes"]
+
+
+@pytest.mark.asyncio
+async def test_model_timeout_preserves_attempts(samples_client, local_samples, monkeypatch):
+    usage = {"total_tokens": 0, "request_attempts": 1}
+    attempts = [ModelAttempt(role="primary", provider="test", model="test", status="unavailable",
+                             error_type="TimeoutError", request_attempts=1)]
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", AsyncMock(
+        side_effect=AllModelsUnavailableError(attempts, usage),
+    ))
+    response = await samples_client.post("/api/v1/reader/samples/writing", json={
+        "paper_ids": [item["id"] for item in local_samples],
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model_completed"] is False
+    assert data["usage"]["request_attempts"] == 1
+    assert data["model_attempts"][0]["error_type"] == "TimeoutError"

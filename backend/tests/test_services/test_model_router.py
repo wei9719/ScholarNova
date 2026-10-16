@@ -357,6 +357,90 @@ async def test_real_gateway_router_reports_transport_and_usage_independently(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider,model,task,expected_options", [
+    ("siliconflow", "Qwen/Qwen3-VL-8B-Instruct", "vision", None),
+    ("siliconflow", "Qwen/Qwen3-VL-32B-Instruct", "vision", None),
+    ("siliconflow", "Qwen/Qwen2.5-VL-72B-Instruct", "vision", None),
+    ("siliconflow", "Qwen/Qwen3-VL-8B-Instruct-AWQ", "vision", None),
+    ("siliconflow", "Qwen/Qwen3.6-27B", "assistant", {"enable_thinking": False}),
+    ("zhipu", "glm-4.6v-flash", "vision", {"thinking": {"type": "disabled"}}),
+])
+async def test_real_gateway_uses_model_compatible_thinking_options(monkeypatch, provider, model, task, expected_options):
+    import ssl
+
+    from app.services.llm.gateway import LLMGateway
+
+    client = AsyncMock()
+    client.chat.completions.create.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="Visible answer"))],
+        usage={"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+    )
+    constructors = []
+
+    def sdk_client(**kwargs):
+        constructors.append(kwargs)
+        return client
+
+    monkeypatch.setattr("openai.AsyncOpenAI", sdk_client)
+    monkeypatch.setattr("app.services.llm.gateway._load_ssl_context",
+                        AsyncMock(return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)))
+    result = await chat_with_fallback(
+        task=task, messages=[{"role": "user", "content": "Read this page"}],
+        temperature=0.2, max_tokens=100, gateway_factory=LLMGateway,
+        profile={"provider": provider, "model": model, "api_key": "synthetic-only",
+                 "base_url": "https://offline.invalid/v1"}, allow_fallback=False,
+    )
+    client.chat.completions.create.assert_awaited_once()
+    forwarded = client.chat.completions.create.await_args.kwargs
+    assert forwarded["model"] == model
+    if expected_options is None:
+        assert "extra_body" not in forwarded
+    else:
+        assert forwarded["extra_body"] == expected_options
+    assert "_max_retries" not in forwarded
+    assert constructors[0]["max_retries"] == 0
+    assert result.usage["request_attempts"] == 1
+    assert result.attempts[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_vision_rate_limit_has_one_request_no_retry_or_fallback(monkeypatch):
+    import ssl
+
+    import httpx
+    import openai
+
+    from app.services.llm.gateway import LLMGateway
+
+    client = AsyncMock()
+    client.chat.completions.create.side_effect = openai.RateLimitError(
+        "synthetic rate limit", response=httpx.Response(
+            429, request=httpx.Request("POST", "https://offline.invalid/v1/chat/completions"),
+        ), body=None,
+    )
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda **_kwargs: client)
+    monkeypatch.setattr("app.services.llm.gateway._load_ssl_context",
+                        AsyncMock(return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)))
+    monkeypatch.setattr("app.services.llm.gateway.settings.LLM_MAX_RETRIES", 3)
+    monkeypatch.setattr("app.services.inference.model_router.get_fallback_model_config", lambda: {
+        "enabled": True, "provider": "qwen", "model": "text-fallback-must-not-run",
+    })
+    with pytest.raises(AllModelsUnavailableError) as caught:
+        await chat_with_fallback(
+            task="vision", messages=[{"role": "user", "content": "Read this page"}],
+            temperature=0.2, max_tokens=100, gateway_factory=LLMGateway,
+            profile={"provider": "siliconflow", "model": "Qwen/Qwen3-VL-8B-Instruct",
+                     "api_key": "synthetic-only", "base_url": "https://offline.invalid/v1"},
+        )
+    client.chat.completions.create.assert_awaited_once()
+    assert "extra_body" not in client.chat.completions.create.await_args.kwargs
+    assert caught.value.usage["request_attempts"] == 1
+    assert caught.value.usage["responses_received"] == 1
+    assert len(caught.value.attempts) == 1
+    assert caught.value.attempts[0].error_type == "RateLimitError"
+
+
+@pytest.mark.asyncio
 async def test_query_planner_adapter_keeps_useful_budget_without_second_model(monkeypatch):
     from app.services.search.query_planner import QueryPlanner
     from app.schemas.query import DataSource

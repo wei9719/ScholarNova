@@ -315,6 +315,33 @@ class TestLLMGateway:
         assert gateway.chat.await_args.kwargs["extra_body"] == {"enable_thinking": False}
         assert gateway.chat.await_args.kwargs["_max_retries"] == 0
 
+    @pytest.mark.parametrize("model", [
+        "Qwen/Qwen3-VL-8B-Instruct", "Qwen/Qwen3-VL-32B-Instruct",
+        "Qwen/Qwen2.5-VL-72B-Instruct", "Qwen/Qwen3-VL-8B-Instruct-AWQ",
+    ])
+    async def test_siliconflow_instruct_probe_omits_unsupported_thinking(self, model):
+        gateway = LLMGateway(provider="siliconflow")
+        gateway.configure(model_name=model)
+        gateway.chat = AsyncMock(return_value="hello")
+
+        result = await gateway.test_connection()
+
+        assert result["success"] is True
+        assert "extra_body" not in gateway.chat.await_args.kwargs
+        assert gateway.chat.await_args.kwargs["_max_retries"] == 0
+
+    async def test_siliconflow_probe_checks_actual_global_default_model(self, monkeypatch):
+        monkeypatch.setattr("app.services.llm.gateway.settings.OPENAI_DEFAULT_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
+        gateway = LLMGateway(provider="siliconflow")
+        gateway.chat = AsyncMock(return_value="hello")
+
+        result = await gateway.test_connection()
+
+        assert result["success"] is True
+        assert gateway._model_name is None
+        assert "extra_body" not in gateway.chat.await_args.kwargs
+        assert gateway.chat.await_args.kwargs["_max_retries"] == 0
+
     async def test_chat_anthropic_success(self):
         """Anthropic 调用成功应返回响应文本"""
         mock_content = MagicMock()

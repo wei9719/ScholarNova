@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useInRouterContext, useSearchParams } from 'react-router-dom'
 import {
   Bot,
   BookMarked,
@@ -21,6 +22,7 @@ import { agentApi, knowledgeApi, zoteroApi } from '@/api/client'
 import type { AgentChatResponse, AgentMessage } from '@/api/types'
 import { useAssistantStore, type AssistantMessage } from '@/stores/assistantStore'
 import { useLocaleStore } from '@/stores/localeStore'
+import PaperReadingWorkspace from '@/components/PaperReadingWorkspace/PaperReadingWorkspace'
 
 const STORAGE_KEY = 'scholarnova-research-assistant-v1'
 
@@ -31,6 +33,19 @@ function newId() {
 }
 
 export default function ResearchAssistant() {
+  const inRouter = useInRouterContext()
+  return inRouter ? <AssistantRoute /> : <ResearchAssistantChat />
+}
+
+function AssistantRoute() {
+  const [params] = useSearchParams()
+  const paperId = params.get('paper')?.trim()
+  const page = Number(params.get('page') || '1')
+  const hash = params.get('version') || ''
+  return paperId ? <PaperReadingWorkspace key={`${paperId}:${page}:${hash}`} paperId={paperId} initialCategory={params.get('category') || ''} initialPage={Number.isInteger(page) && page > 0 ? page : 1} initialHash={hash} /> : <ResearchAssistantChat />
+}
+
+function ResearchAssistantChat() {
   const { locale } = useLocaleStore()
   const isChinese = locale === 'zh'
   const {

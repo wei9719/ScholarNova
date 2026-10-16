@@ -17,10 +17,14 @@ from app.api.v1 import (
     recommendations,
     search,
     study,
+    journals,
+    reader,
 )
 
 # 创建 API 路由器
 api_router = APIRouter()
+api_router.include_router(journals.router, prefix="/journals", tags=["journals"])
+api_router.include_router(reader.router, prefix="/reader", tags=["reader"])
 
 api_router.include_router(
     agent.router,

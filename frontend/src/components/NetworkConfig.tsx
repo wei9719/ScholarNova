@@ -57,9 +57,9 @@ export default function NetworkConfig() {
       const content = await file.text()
       const { data } = await papersApi.importRankings(file.name, content)
       setRankingStatus(data)
-      toast.success(`已导入 ${data.entry_count} 条期刊分区记录`)
+      toast.success(`已导入 ${data.entry_count} 条期刊分区与指标记录`)
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || '分区文件导入失败')
+      toast.error(error.response?.data?.detail || '期刊分区与指标文件导入失败')
     } finally { setImporting(false) }
   }
 
@@ -127,15 +127,15 @@ export default function NetworkConfig() {
 
       <div className="bg-amber-50 dark:bg-amber-900/15 rounded-xl p-4 border border-amber-200 dark:border-amber-800/30">
         <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-2">
-          <Database className="w-4 h-4" />期刊分区与开放质量指标
+          <Database className="w-4 h-4" />期刊分区、影响因子与开放指标
         </h4>
         <p className="mt-2 text-xs leading-5 text-amber-800/80 dark:text-gray-400">
-          搜索结果会异步补充 OpenAlex H-index、两年平均被引和 DOAJ 状态。这些是开放指标，不冒充 JCR 或中科院分区。你可导入自己合法获得的 CSV/JSON 分区表，支持 JCR、历史中科院和 SJR 列。
+          搜索结果会异步补充 OpenAlex H-index、两年平均被引和 DOAJ 状态。OpenAlex 两年平均被引不等于 JIF 影响因子，也不代表 JCR 或中科院分区。可导入合法获得的 CSV/JSON，支持 JCR、历史中科院、SJR 分区，以及 JIF、JIF 年份和来源；影响因子须同时保留报告年份与数据来源，不同指标不能混用。
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <label className="inline-flex cursor-pointer items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
             {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-            导入分区 CSV/JSON
+            导入分区 / JIF CSV/JSON
             <input type="file" accept=".csv,.json,text/csv,application/json" className="hidden"
               disabled={importing} onChange={(event) => handleImport(event.target.files?.[0])} />
           </label>

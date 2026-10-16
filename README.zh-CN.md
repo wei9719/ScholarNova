@@ -1,5 +1,5 @@
 <p align="center"><img src="docs/assets/scholarnova-cover-en.svg" width="800" alt="ScholarNova — AI Research Workspace"></p>
-<p align="center"><a href="https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5">Download / 下载</a> · <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="docs/USER_MANUAL.zh-CN.md">产品与使用手册</a> · <a href="CHANGELOG.md">Changelog</a></p>
+<p align="center"><a href="https://github.com/wei9719/ScholarNova/releases/latest">Download / 下载</a> · <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="docs/USER_MANUAL.zh-CN.md">产品与使用手册</a> · <a href="CHANGELOG.md">Changelog</a></p>
 <p align="center"><a href="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/ci.yml"><img src="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/desktop-release.yml"><img src="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/desktop-release.yml/badge.svg" alt="Desktop builds"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/Own_source-MIT-d4a84f" alt="项目自有源代码：MIT"></a> <a href="docs/DESKTOP_LICENSE_REVIEW.md"><img src="https://img.shields.io/badge/Desktop_combination-AGPLv3-536b82" alt="桌面发行组合：AGPLv3"></a></p>
 
 # ScholarNova
@@ -8,15 +8,27 @@
 
 **研究学习流程（当前源码）**：按全部、今年、近三年或自定义年份检索，在搜索页指定“笔记研究分类”，从论文详情新建或继续阅读笔记；九个章节分别保留论文材料、AI 建议和个人实践，再提炼基础知识、技能卡或导出 Markdown。不另建学习导航，继续使用知识库、智能体和研究路线。[产品与使用手册](docs/USER_MANUAL.zh-CN.md)包含交通流数据修复案例与逐步验收清单。检索时间不是索引更新时间，新近发表也不等于更有创新性；本阶段的复现、绘图和排版栏目提供记录与建议，不自动执行实验或生成原生 Word/PDF。
 
-**跟着真实场景学使用**：[完整研究案例使用手册（Word）](docs/guides/ScholarNova完整研究案例使用手册.docx)以 METR-LA 交通速度缺失修复为研究点，配合实际界面，逐步讲解检索、全文阅读、九章笔记、知识积累、分类问答、研究路线与导出，并提供提问示例、复现检查表和验收方法。
+**跟着真实场景学使用**：[完整研究案例使用手册（Word）](docs/guides/ScholarNova完整研究案例使用手册.docx)以 METR-LA 交通速度缺失修复为研究点，配合实际界面，逐步讲解检索、全文阅读、九章笔记、知识积累、分类问答、研究路线与导出，并提供提问示例、复现检查表和验收方法。该 Word 手册对应 **1.2.12**；新增期刊发现、授权浏览和原文伴读，请看[在线手册第 12 节](docs/USER_MANUAL.zh-CN.md#12-1213期刊发现授权全文和原文伴读)与[1.2.13 使用案例](docs/releases/v1.2.13-guided-reading.zh-CN.md)。
 
-**当前源码：1.2.12，公开安装包仍以 Release 附件为准。** 本次增加发表时间检索、分类阅读笔记、基础知识与技能卡，以及依据本地材料的分章节辅助整理。详见 [本轮验收记录](docs/reports/v1.2.12-research-notebook.zh-CN.md)。此前的 [检索与相似推荐优化](docs/reports/v1.2.11-search-recommendations.zh-CN.md)、[真实业务验收](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md)、[完整研究流程](docs/reports/v1.2.8-research-workflow.zh-CN.md)、[并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md) 和 [13 个同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md) 保留。已安装软件需通过新安装包升级。
+**当前源码：1.2.13，公开安装包仍以 Release 附件为准。** 本轮增加主动查询的相关期刊、独立授权全文窗口，以及智能体中的按页伴读和 2–5 篇本地全文写作样例对照。先核对材料，再生成解释；阅读笔记、基础知识和技能卡继续使用同一个知识库。详见 [1.2.13 使用案例与边界](docs/releases/v1.2.13-guided-reading.zh-CN.md)。此前的 [阅读笔记](docs/reports/v1.2.12-research-notebook.zh-CN.md)、[检索与相似推荐优化](docs/reports/v1.2.11-search-recommendations.zh-CN.md)、[真实业务验收](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md)、[并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md)和[同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md)保留。已安装软件需通过对应安装包升级；本轮源码和 Windows 测试不代表新 macOS 包已构建或真实校园订阅已验收。
+
+### 1.2.13 从哪里开始
+
+| 你想做什么 | 操作入口与实际范围 |
+| --- | --- |
+| 找与关键词相关的期刊 | 搜索结果下点击“查询相关期刊”，按 OpenAlex 类型、Source ID 与 ISSN 核对，查看本次候选命中数、主页和该刊相关论文；不自动增加首次搜索等待 |
+| 核对期刊指标 | 每个指标保留名称、来源与年度；OpenAlex 开放指标不是影响因子。正式 JIF 只显示带年份的本机授权导入数据 |
+| 取得机构全文 | 在论文详情点击“机构授权获取”，用户自行登录，识别页面 PDF 或点击下载按钮，核对绑定论文和下载信息后确认；不兼容的网站使用外部浏览器下载再手动导入 |
+| 逐页读懂原文 | 论文详情点击“原文伴读”，进入智能体中的指定论文工作区；翻译选段、解释段落/公式、读图表、补基础与练习、整理写作样例、阅读拓展 |
+| 积累投稿写作方法 | 伴读中选择 2–5 篇已有本地全文的样本进行有界对照，核对页码与版本，再整理为现有技能卡草稿；确认保存后才入库 |
+
+校园窗口使用应用内独立直连会话，公共窗口沿用系统网络，不更改系统 VPN；账号授权仍由用户完成。导入 PDF 只在本地保存与解析，点击 AI 任务后才发送对应页面或选段。扫描件目前不自动 OCR；图表与公式解释需要在设置中明确配置支持图像输入的视觉模型。学习建议和阅读推荐不是掌握程度证明。
 
 **历史真实 API 验证（10 月 3 日）**：38 次文本请求尝试中 34 次完成、4 次返回 429，服务商报告 50,573 Token，另完成 2 张路线图片。六任务/并发三的小样本总耗时从约 56 秒降到 34 秒；公开论文复测实际读取文字节选和 3 个图表页。当时发现的复杂检索问题在 1.2.11 中针对交通流等场景修复并复测，不等于所有学科检索质量均已验证，也不代表极限并发容量。此前的 [短文本探测及 Semantic Scholar 匿名限流记录](docs/reports/live-api-scenarios-2026-10-03.zh-CN.md) 单独保留。
 
 ## 下载与安装
 
-**[v1.2.5 已发布](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5)**：提供 Windows x64、Intel Mac、Apple Silicon Mac 安装包、Windows 便携版，以及同版本源码和 SHA256 校验文件。新增失败指导原位重试，保留历史用量，精简模型上下文，并改善便携版解压启动。详见 [发布与验收报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。
+**历史公开版本 [v1.2.5](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5)** 提供 Windows x64、Intel Mac、Apple Silicon Mac 安装包、Windows 便携版，以及同版本源码和 SHA256 校验文件。详见[该版发布与验收报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。新功能需要对应版本安装包，不能依据最新源码版本推定某平台安装包已发布。
 
 到 **[GitHub Releases 下载已发布安装包](https://github.com/wei9719/ScholarNova/releases/latest)**，展开 Assets，按你的电脑选择。v1.2.5 已通过三个桌面平台的自动构建和启动检查。
 
@@ -80,7 +92,8 @@ Windows 日常使用优先选择 **Setup 安装版**。v1.2.5 便携版调整解
 | 场景 | 已有能力 |
 | --- | --- |
 | 复杂文献检索 | 查询分解、多源并行召回、去重、条件过滤与综合排序；相关度和引用影响力分别展示 |
-| 论文阅读 | 正文、章节、表格、图注和可用图表页；本地 PDF 导入；标题中文翻译；可拖宽的侧栏 |
+| 论文阅读 | 授权 PDF 导入、指定页与选段伴读、段落翻译、图表/公式解释、基础练习；页码与文件版本回溯；可拖宽的侧栏 |
+| 期刊与写作参考 | 主动发现相关期刊、核对指标口径、该刊相关论文；2–5 篇本地全文的有界写作样例对照，确认后保存为现有技能卡 |
 | 个人研究积累 | 分类阅读笔记、基础知识与技能卡；九章节、个人进度、按需草稿、Markdown 导出；复用研究路线和结构化架构图 |
 | 有来源的问答 | BM25，或可选 Embedding + RRF；提供文献/片段定位、引用检查和工具记录 |
 | 多模型使用 | 主模型、备用模型及任务配置；统计供应商返回的 Token，控制超时与重试 |
@@ -96,8 +109,8 @@ Windows 日常使用优先选择 **Setup 安装版**。v1.2.5 便携版调整解
 - [API Key 申请入口与配置说明](docs/API_PROVIDERS.md)：GLM、千问 / 百炼、硅基流动、MiMo、SenseNova、OpenAI、Ollama 等。
 - **Zotero**：先启动 Zotero，在“设置 → 高级”打开“允许此计算机上的其他应用程序与 Zotero 通讯”，然后到 ScholarNova 设置中检测并选择集合。读取成功不等于写入授权；写入失败时请按提示使用标准文献导出。
 - **当前源码的 Zotero 同步**：个人文库的文件夹通过完整层级确认，写入后回读核验目标。当前只保证论文元数据，不保证 PDF 附件同步；群组库、同路径同名文件夹或未确认的写入会明确报错，请勿盲目重复点击。
-- **学校图书馆**：提供门户跳转和检索词传递。统一身份认证、校园网或学校认可的 VPN 仍由用户完成，当前不自动代登录或批量下载订阅全文。
-- **期刊分区**：开放引用指标可直接展示；JCR / 中科院分区需要导入有授权且注明年份的数据。缺失显示未知，不能用引用次数猜分区。
+- **学校图书馆**：搜索页提供门户与检索词入口；从论文详情进入可绑定论文，在独立直连窗口自行登录、识别 PDF、核对下载身份并确认导入。不会代登录、绕过订阅或批量下载；不兼容的登录、内网地址和网页使用外部浏览器后手动导入。学校认可的 VPN/WebVPN 仍需用户按学校要求准备。
+- **期刊指标**：相关期刊中开放指标保留来源且不冒充 JIF；JCR / 中科院分区及正式 JIF 来自有权使用的本地导入文件。JIF CSV 最小示例为 `Journal,JIF,JIF Year,Source`，记录如 `目标期刊名,5.4,2025,本人授权数据来源`；该数字只是格式示例，不能作为真实期刊指标。
 - **代理与网络**：不同 API、图书馆和本机 Zotero 的网络需求不同。确保 `localhost`、`127.0.0.1` 不走代理；按实际报错检查地址、模型权限、额度与网络。
 
 ## 本地数据与隐私

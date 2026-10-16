@@ -387,6 +387,47 @@ async def upload_fulltext(
             raise
 
 
+def _inspect_pdf_identity(content: bytes, title: str, doi: str) -> dict:
+    import pymupdf
+
+    with pymupdf.open(stream=content, filetype="pdf") as document:
+        if document.is_encrypted or document.page_count < 1:
+            raise ValueError("PDF 已加密或没有可读页面")
+        first_page = document[0].get_text(sort=True)[:12000]
+        title_words = set(re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]", title.lower())) - {"the", "and", "of", "in", "for", "a", "by", "to"}
+        page_words = set(re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]", first_page.lower()))
+        overlap = len(title_words & page_words) / max(len(title_words), 1)
+        doi_match = bool(doi and doi.lower() in re.sub(r"\s", "", first_page.lower()))
+        likely = doi_match or (len(title_words) >= 3 and overlap >= .8)
+        return {
+            "likely_match": likely, "page_count": document.page_count,
+            "summary": "标题词或 DOI 与绑定论文可能一致，仍请人工核对版本。" if likely else "未能自动确认论文身份，请仔细核对；不一致时取消，避免覆盖原全文。",
+            "excerpt": re.sub(r"\s+", " ", first_page[:600]).strip() or "本页没有可提取文字，请查看下载文件。",
+        }
+
+
+@router.post("/{paper_id}/fulltext/inspect")
+async def inspect_fulltext_identity(paper_id: str, file: UploadFile = File(...),
+                                    db: AsyncSession = Depends(get_db)):
+    """Local-only preview before confirmation; does not publish files or call AI."""
+    info = await _find_paper_info(paper_id, db)
+    await db.rollback()
+    if not info:
+        raise HTTPException(status_code=404, detail="论文不存在")
+    content = await file.read(MAX_PDF_UPLOAD_SIZE + 1)
+    await file.close()
+    if len(content) > MAX_PDF_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="PDF 不能超过 50 MB")
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="文件不是 PDF")
+    try:
+        return await asyncio.wait_for(run_pdf_work(_inspect_pdf_identity, content, info["title"], info.get("doi") or ""), 25)
+    except (PDFBusyError, TimeoutError) as exc:
+        raise HTTPException(status_code=503, detail="PDF 预览正忙，请稍后重试") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail="PDF 无法预览，请核对文件") from exc
+
+
 async def _save_fulltext(paper_id: str, file: UploadFile, db: AsyncSession) -> dict:
     if not await _find_paper_info(paper_id, db):
         raise HTTPException(status_code=404, detail="Paper not found")

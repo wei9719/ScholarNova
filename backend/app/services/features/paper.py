@@ -12,7 +12,7 @@ from app.models.paper import PaperChunk, PaperEntity
 from app.services.features.knowledge import split_knowledge_text
 from app.services.pdf.parser import ParsedDocument
 
-PAPER_FEATURE_VERSION = "pdf-parser-chunker-v2"
+PAPER_FEATURE_VERSION = "pdf-parser-chunker-v3"
 _WHITESPACE = re.compile(r"[ \t\r\f\v]+")
 
 
@@ -57,11 +57,13 @@ def build_paper_chunks(
 ) -> list[PaperChunk]:
     """Convert parsed sections, tables, and captions into stable feature rows."""
     entries: list[tuple[str, str | None, int | None, str]] = []
+    has_pages = bool(re.search(r"\[Page\s+\d+\]", parsed.full_text or "", re.IGNORECASE))
     abstract = _clean(parsed.abstract)
     if abstract:
         entries.append(("abstract", "Abstract", None, abstract))
 
-    for section in parsed.sections or []:
+    # Exact page chunks replace coarse section spans when page text exists.
+    for section in ([] if has_pages else parsed.sections or []):
         heading = _clean(section.heading) or "Section"
         for content in split_knowledge_text(_clean(section.text)):
             entries.append(("section", heading, section.page_start, content))
@@ -80,7 +82,10 @@ def build_paper_chunks(
             page = figure.get("page") if isinstance(figure.get("page"), int) else None
             entries.append(("figure", heading, page, caption))
 
-    if not entries:
+    # Recognizing an abstract/one section must not hide all unrecognized pages.
+    # Parser page markers are exact page locators; section.page_start is only a
+    # section start, not the page of every later paragraph in that section.
+    if has_pages or not entries:
         for page, content in _fulltext_chunks(parsed.full_text):
             entries.append(("fulltext", "Full text", page, content))
 

@@ -109,10 +109,12 @@ def _gateway_for_profile(
     return gateway
 
 
-def _request_options(provider: str) -> dict[str, Any]:
+def _request_options(provider: str, model: str = "") -> dict[str, Any]:
     if provider == "zhipu":
         return {"extra_body": {"thinking": {"type": "disabled"}}}
-    if provider == "siliconflow":
+    # Explicit Instruct models (including Qwen-VL) reject enable_thinking.
+    # Keep the existing non-thinking policy for hybrid text/reasoning models.
+    if provider == "siliconflow" and "instruct" not in model.casefold():
         return {"extra_body": {"enable_thinking": False}}
     return {}
 
@@ -161,8 +163,8 @@ async def chat_with_fallback(
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                **({"_max_retries": 0} if task in {"assistant", "query_planning"} else {}),
-                **_request_options(str(profile.get("provider") or "")),
+                **({"_max_retries": 0} if task in {"assistant", "query_planning", "vision"} else {}),
+                **_request_options(str(profile.get("provider") or ""), str(profile.get("model") or "")),
             )
             timeout = timeout_seconds if timeout_seconds is not None else _route_timeout(task)
             if profile.get("provider") == "local" and timeout_seconds is None:

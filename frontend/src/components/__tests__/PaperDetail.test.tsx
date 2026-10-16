@@ -1,11 +1,12 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AnalysisResult, PaperDetail as Paper } from '@/api/types'
 import { useLocaleStore } from '@/stores/localeStore'
 import PaperDetail from '../PaperDetail/PaperDetail'
 
-const api = vi.hoisted(() => ({ fulltextStatus: vi.fn() }))
+const api = vi.hoisted(() => ({ fulltextStatus: vi.fn(), uploadFulltext: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }))
 vi.mock('@/api/client', () => ({ papersApi: api, knowledgeApi: {}, zoteroApi: {} }))
+vi.mock('react-hot-toast', () => ({ default: Object.assign(vi.fn(), { success: api.toastSuccess, error: api.toastError }) }))
 
 const paper: Paper = {
   id: 'visual-fixture', title: 'Visual fixture', authors: ['Researcher'], abstract: 'Synthetic evidence.',
@@ -35,11 +36,13 @@ beforeEach(() => {
   vi.resetAllMocks()
   useLocaleStore.getState().setLocale('zh')
   api.fulltextStatus.mockResolvedValue({ data: { available: true, source: 'uploaded', file_size: 100 } })
+  delete window.scholarAccess
 })
 afterEach(() => {
   cleanup()
   useLocaleStore.getState().setLocale('zh')
   useLocaleStore.persist.clearStorage()
+  delete window.scholarAccess
 })
 
 it('shows extracted-but-unread figures separately from text success and allows retry', async () => {
@@ -83,4 +86,72 @@ it('uses an honest English zero-page label rather than claiming extraction faile
   expect(screen.queryByText(/Full text read/)).not.toBeInTheDocument()
   expect(screen.getByText(/no visual page was successfully read/)).toBeInTheDocument()
   expect(screen.queryByText(/no visual page was extracted/)).not.toBeInTheDocument()
+})
+
+function nativeDetail() {
+  const listeners: Array<(event: { paper_id: string }) => void> = []
+  const unsubscribe = vi.fn()
+  window.scholarAccess = { open: vi.fn(), onImported: vi.fn(callback => { listeners.push(callback); return unsubscribe }) }
+  const onUploaded = vi.fn()
+  const props = { paper, analysis: null, analysisLoading: false, evidenceSpans: [], evidenceLoading: false, onClose: vi.fn(), onAnalyze: vi.fn(), onFulltextUploaded: onUploaded }
+  const view = render(<PaperDetail {...props} />)
+  return { ...view, props, onUploaded, listeners, unsubscribe }
+}
+
+it('does not let an initial status request overwrite a newer authorized import status', async () => {
+  let oldFinish!: (value: any) => void
+  api.fulltextStatus.mockReturnValueOnce(new Promise(resolve => { oldFinish = resolve }))
+    .mockResolvedValueOnce({ data: { available: true, source: 'uploaded', file_size: 500 } })
+  const detail = nativeDetail()
+  act(() => detail.listeners.at(-1)!({ paper_id: paper.id }))
+  await screen.findByRole('button', { name: '替换全文' })
+  await act(async () => oldFinish({ data: { available: false, source: null, file_size: 0 } }))
+  expect(screen.getByRole('button', { name: '替换全文' })).toBeInTheDocument()
+  expect(detail.onUploaded).toHaveBeenCalledWith(false)
+  expect(detail.props.onAnalyze).not.toHaveBeenCalled()
+})
+
+it('ignores old-paper native callbacks and pending status responses after switching papers', async () => {
+  let oldFinish!: (value: any) => void
+  api.fulltextStatus.mockReturnValueOnce(new Promise(resolve => { oldFinish = resolve }))
+    .mockResolvedValue({ data: { available: false, source: null, file_size: 0 } })
+  const detail = nativeDetail()
+  const oldCallback = detail.listeners.at(-1)!
+  const second = { ...paper, id: 'second-paper', title: 'Second paper' }
+  detail.rerender(<PaperDetail {...detail.props} paper={second} />)
+  await waitFor(() => expect(api.fulltextStatus).toHaveBeenCalledWith('second-paper'))
+  act(() => { oldCallback({ paper_id: paper.id }); detail.listeners.at(-1)!({ paper_id: paper.id }) })
+  await act(async () => oldFinish({ data: { available: true, source: 'uploaded', file_size: 100 } }))
+  expect(screen.getByRole('button', { name: '导入全文 PDF' })).toBeInTheDocument()
+  expect(detail.onUploaded).not.toHaveBeenCalled()
+  expect(api.toastSuccess).not.toHaveBeenCalled()
+  expect(detail.unsubscribe).toHaveBeenCalled()
+})
+
+it('removes native listeners and ignores an already queued callback after the detail closes', async () => {
+  const detail = nativeDetail()
+  await waitFor(() => expect(api.fulltextStatus).toHaveBeenCalledTimes(1))
+  const queued = detail.listeners.at(-1)!
+  detail.unmount()
+  act(() => queued({ paper_id: paper.id }))
+  expect(api.fulltextStatus).toHaveBeenCalledTimes(1)
+  expect(detail.onUploaded).not.toHaveBeenCalled()
+  expect(api.toastSuccess).not.toHaveBeenCalled()
+  expect(detail.unsubscribe).toHaveBeenCalledTimes(1)
+})
+
+it('does not show an old manual PDF upload status on the next paper, but invalidates the old paper cache', async () => {
+  api.fulltextStatus.mockResolvedValue({ data: { available: false, source: null, file_size: 0 } })
+  let finish!: (value: any) => void
+  api.uploadFulltext.mockReturnValue(new Promise(resolve => { finish = resolve }))
+  const detail = nativeDetail()
+  const input = detail.container.querySelector<HTMLInputElement>('input[type="file"]')!
+  fireEvent.change(input, { target: { files: [new File(['PDF'], 'old-paper.pdf', { type: 'application/pdf' })] } })
+  expect(api.uploadFulltext).toHaveBeenCalledTimes(1)
+  detail.rerender(<PaperDetail {...detail.props} paper={{ ...paper, id: 'second-paper', title: 'Second paper' }} />)
+  await waitFor(() => expect(api.fulltextStatus).toHaveBeenCalledWith('second-paper'))
+  await act(async () => finish({ data: { available: true, source: 'uploaded', file_size: 500 } }))
+  expect(screen.getByRole('button', { name: '导入全文 PDF' })).toBeEnabled()
+  expect(detail.onUploaded).toHaveBeenCalledTimes(1)
+  expect(api.toastSuccess).not.toHaveBeenCalled()
 })

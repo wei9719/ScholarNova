@@ -5,10 +5,9 @@
 所有外部服务（LLM、学术数据源、Redis）通过 Mock 替代。
 """
 
-import asyncio
 import uuid
 from datetime import datetime
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,18 +25,6 @@ def isolate_runtime_files(tmp_path, monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "RUNTIME_DIR", str(tmp_path))
-
-
-# ---------------------------------------------------------------------------
-# 事件循环
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """创建会话级别的事件循环"""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,24 @@ async def test_siliconflow_structured_probe_disables_thinking():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task,response", [
+    ("vision", "red"), ("query_planning", '{"scholarnova_probe": true}'),
+    ("analysis", "SCHOLARNOVA_OK"),
+])
+async def test_siliconflow_instruct_probes_skip_unsupported_thinking(task, response):
+    _FakeFactory.gateway = _FakeGateway(response)
+
+    report = await run_capability_probe(
+        {"provider": "siliconflow", "model": "Qwen/Qwen3-VL-8B-Instruct"},
+        task, gateway_factory=_FakeFactory,
+    )
+
+    assert report["status"] == "passed"
+    assert "extra_body" not in _FakeFactory.gateway.kwargs
+    assert _FakeFactory.gateway.kwargs["_max_retries"] == 0
+
+
+@pytest.mark.asyncio
 async def test_vision_probe_actually_sends_an_image_part():
     _FakeFactory.gateway = _FakeGateway("red")
 

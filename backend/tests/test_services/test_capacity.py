@@ -120,9 +120,40 @@ async def test_saturated_pool_does_not_gate_status_cancel_or_unrelated_routes():
     "/api/v1/knowledge/ai-analyze", "/api/v1/knowledge/recommend",
     "/api/v1/knowledge/routes/123/ai-generate", "/api/v1/papers/123/analyze",
     "/api/v1/papers/123/fulltext", "/api/v1/papers/123/translate",
+    "/api/v1/papers/123/fulltext/inspect", "/api/v1/reader/123/assist",
+    "/api/v1/reader/samples/writing", "/api/v1/study/draft",
 ])
 def test_expensive_routes_are_covered(path):
     assert ExpensiveRequestMiddleware.applies({"type": "http", "method": "POST", "path": path})
+
+
+@pytest.mark.asyncio
+async def test_saturated_pdf_inspection_rejected_before_reading_large_body():
+    pool = WorkPool(active=1, queued=0, wait_seconds=1)
+    lease = pool.reserve()
+    await lease.__aenter__()
+    messages = []
+
+    async def forbidden_receive():
+        raise AssertionError("A saturated request must not read the 50 MB PDF body")
+
+    async def forbidden_app(_scope, _receive, _send):
+        raise AssertionError("A saturated request must not enter the PDF inspection handler")
+
+    async def send(message):
+        messages.append(message)
+
+    try:
+        await ExpensiveRequestMiddleware(forbidden_app, pool)(
+            {"type": "http", "method": "POST", "path": "/api/v1/papers/123/fulltext/inspect"},
+            forbidden_receive, send,
+        )
+        assert messages[0]["type"] == "http.response.start"
+        assert messages[0]["status"] == 429
+        assert pool.reserved == pool.active == 1
+    finally:
+        lease.release()
+    assert_empty(pool)
 
 
 @pytest.mark.asyncio

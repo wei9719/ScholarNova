@@ -55,11 +55,11 @@ def _usage(gateway: Any) -> dict[str, int]:
     }
 
 
-def _request_options(provider: str) -> dict[str, Any]:
+def _request_options(provider: str, model: str = "") -> dict[str, Any]:
     options: dict[str, Any] = {}
     if provider == "zhipu":
         options["extra_body"] = {"thinking": {"type": "disabled"}}
-    elif provider == "siliconflow":
+    elif provider == "siliconflow" and "instruct" not in model.casefold():
         options["extra_body"] = {"enable_thinking": False}
     if provider in {
         "openai",
@@ -113,7 +113,7 @@ async def run_capability_probe(
                     ],
                     temperature=0,
                     max_tokens=64,
-                    **_request_options(str(profile.get("provider") or "")),
+                    **_request_options(str(profile.get("provider") or ""), str(profile.get("model") or "")),
                 ),
                 timeout=30.0,
             )
@@ -151,7 +151,7 @@ async def run_capability_probe(
                     ],
                     temperature=0,
                     max_tokens=32,
-                    **_request_options(str(profile.get("provider") or "")),
+                    **_request_options(str(profile.get("provider") or ""), str(profile.get("model") or "")),
                 ),
                 timeout=30.0,
             )
@@ -191,7 +191,7 @@ async def run_capability_probe(
                     messages=[{"role": "user", "content": "Reply exactly: SCHOLARNOVA_OK"}],
                     temperature=0,
                     max_tokens=32,
-                    **_request_options(str(profile.get("provider") or "")),
+                    **_request_options(str(profile.get("provider") or ""), str(profile.get("model") or "")),
                 ),
                 timeout=30.0,
             )

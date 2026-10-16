@@ -115,12 +115,14 @@ class ExpensiveRequestMiddleware:
         return (
             path == "/api/v1/agent/chat"
             or path == "/api/v1/study/draft"
+            or (path.startswith("/api/v1/reader/") and path.endswith("/assist"))
+            or path == "/api/v1/reader/samples/writing"
             or path == "/api/v1/recommendations"
             or path.startswith("/api/v1/model/")
             or path == "/api/v1/knowledge"
             or path in {"/api/v1/knowledge/ai-analyze", "/api/v1/knowledge/recommend"}
             or (path.startswith("/api/v1/knowledge/routes/") and "/ai-generate" in path)
-            or (path.startswith("/api/v1/papers/") and path.endswith(("/analyze", "/fulltext", "/translate")))
+            or (path.startswith("/api/v1/papers/") and path.endswith(("/analyze", "/fulltext", "/fulltext/inspect", "/translate")))
         )
 
     async def __call__(self, scope, receive, send):

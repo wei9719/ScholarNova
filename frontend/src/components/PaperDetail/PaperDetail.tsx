@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useInRouterContext } from 'react-router-dom'
 import {
   X, ExternalLink, Copy, Check, Loader2, Sparkles, BookOpen,
   Calendar, Hash, Users, Lightbulb, AlertTriangle, FlaskConical,
@@ -7,7 +8,8 @@ import {
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useLocaleStore } from '@/stores/localeStore'
-import { knowledgeApi, papersApi, zoteroApi } from '@/api/client'
+import { knowledgeApi, papersApi, zoteroApi, networkApi } from '@/api/client'
+import { openAcademicAccess } from '@/api/accessClient'
 import type { Paper, PaperDetail as PaperDetailType, AnalysisResult, FulltextStatus, KnowledgeItem } from '@/api/types'
 import KnowledgeForm from '@/components/KnowledgeForm/KnowledgeForm'
 import SimilarPapers from './SimilarPapers'
@@ -25,7 +27,7 @@ interface PaperDetailProps {
   runId?: string | null
   onClose: () => void
   onAnalyze: (query?: string) => void
-  onFulltextUploaded: () => void
+  onFulltextUploaded: (analyze?: boolean) => void
   onSelectPaper?: (paper: Paper) => void
   researchCategory?: string
   sourceQuery?: string
@@ -45,6 +47,7 @@ export default function PaperDetailPanel({
   onClose, onAnalyze, onFulltextUploaded, onSelectPaper, researchCategory = '', sourceQuery = '',
 }: PaperDetailProps) {
   const { locale } = useLocaleStore()
+  const inRouter = useInRouterContext()
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'abstract' | 'analysis' | 'similar'>('abstract')
   const [translatedAbstract, setTranslatedAbstract] = useState<string | null>(null)
@@ -74,9 +77,44 @@ export default function PaperDetailPanel({
   const [analysisElapsed, setAnalysisElapsed] = useState(0)
   const analysisStartedAtRef = useRef<number | null>(null)
   const fulltextInputRef = useRef<HTMLInputElement>(null)
+  const fulltextStatusRequestRef = useRef(0)
+  const fulltextUploadRequestRef = useRef(0)
+  const visiblePaperIdRef = useRef(paper.id)
+  visiblePaperIdRef.current = paper.id
+  useEffect(() => {
+    visiblePaperIdRef.current = paper.id
+    fulltextUploadRequestRef.current++
+    setUploadingFulltext(false)
+    return () => { visiblePaperIdRef.current = '' }
+  }, [paper.id])
 
   const isChinese = locale === 'zh'
   const abstractText = getAbstractText(paper.abstract)
+  const refreshFulltextStatus = useCallback((markUnavailableOnFailure = false) => {
+    const request = ++fulltextStatusRequestRef.current
+    void papersApi.fulltextStatus(paper.id)
+      .then(({ data }) => { if (request === fulltextStatusRequestRef.current) setFulltextStatus(data) })
+      .catch(() => { if (markUnavailableOnFailure && request === fulltextStatusRequestRef.current) setFulltextStatus({ available: false, source: null, file_size: 0 }) })
+  }, [paper.id])
+  useEffect(() => {
+    let active = true
+    const unsubscribe = window.scholarAccess?.onImported(event => {
+      if (!active || event.paper_id !== paper.id) return
+      refreshFulltextStatus()
+      onFulltextUploaded(false)
+      toast.success(isChinese ? '授权全文已导入，可进入原文伴读' : 'Authorized PDF imported. Open guided reading.')
+    })
+    return () => { active = false; unsubscribe?.() }
+  }, [paper.id, refreshFulltextStatus, onFulltextUploaded, isChinese])
+
+  const openInstitutionalAccess = async () => {
+    try {
+      const { data } = await networkApi.libraryLink(paper.doi || paper.title)
+      await navigator.clipboard.writeText(data.query).catch(() => {})
+      const mode = await openAcademicAccess({ url: data.url, channel: 'campus', paper_id: paper.id })
+      toast.success(mode === 'desktop' ? '已绑定当前论文；请完成机构登录，再识别 PDF 并确认导入' : '请登录图书馆，下载当前论文后点击“导入全文 PDF”')
+    } catch (error) { toast.error(safeErrorMessage(error, '机构页面打开失败')) }
+  }
 
   // 切换论文时重置所有一次性状态，避免残留上一篇的翻译/分析
   useEffect(() => {
@@ -98,13 +136,10 @@ export default function PaperDetailPanel({
   }, [analysisLoading])
 
   useEffect(() => {
-    let active = true
     setFulltextStatus(null)
-    papersApi.fulltextStatus(paper.id)
-      .then(({ data }) => { if (active) setFulltextStatus(data) })
-      .catch(() => { if (active) setFulltextStatus({ available: false, source: null, file_size: 0 }) })
-    return () => { active = false }
-  }, [paper.id])
+    refreshFulltextStatus(true)
+    return () => { fulltextStatusRequestRef.current++ }
+  }, [refreshFulltextStatus])
 
   const handleTranslate = async () => {
     if (translatedAbstract) { setTranslatedAbstract(null); return }
@@ -135,9 +170,16 @@ export default function PaperDetailPanel({
       toast.error(isChinese ? '请选择 PDF 文件' : 'Please select a PDF file')
       return
     }
+    const uploadPaperId = paper.id
+    const request = ++fulltextUploadRequestRef.current
     setUploadingFulltext(true)
     try {
       const { data } = await papersApi.uploadFulltext(paper.id, file)
+      if (visiblePaperIdRef.current !== uploadPaperId || request !== fulltextUploadRequestRef.current) {
+        onFulltextUploaded()
+        return
+      }
+      fulltextStatusRequestRef.current++
       setFulltextStatus(data)
       setActiveAnalysis('full')
       setActiveTab('analysis')
@@ -150,9 +192,9 @@ export default function PaperDetailPanel({
       }
       onFulltextUploaded()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || (isChinese ? 'PDF 导入失败' : 'PDF import failed'))
+      if (visiblePaperIdRef.current === uploadPaperId && request === fulltextUploadRequestRef.current) toast.error(error.response?.data?.detail || (isChinese ? 'PDF 导入失败' : 'PDF import failed'))
     } finally {
-      setUploadingFulltext(false)
+      if (visiblePaperIdRef.current === uploadPaperId && request === fulltextUploadRequestRef.current) setUploadingFulltext(false)
     }
   }
 
@@ -314,6 +356,13 @@ export default function PaperDetailPanel({
 
       {/* Links */}
       <div className="paper-detail-links">
+        {inRouter
+          ? <Link to={`/assistant?paper=${encodeURIComponent(paper.id)}&category=${encodeURIComponent(researchCategory)}`} className="paper-link"><BookOpen className="w-3.5 h-3.5" />{isChinese ? '原文伴读' : 'Guided reading'}</Link>
+          : <a href={`/assistant?paper=${encodeURIComponent(paper.id)}`} className="paper-link"><BookOpen className="w-3.5 h-3.5" />{isChinese ? '原文伴读' : 'Guided reading'}</a>}
+        <button type="button" className="paper-link" onClick={openInstitutionalAccess}><Library className="w-3.5 h-3.5" />{isChinese ? '机构授权获取' : 'Institutional full text'}</button>
+        {paper.url && <button type="button" className="paper-link" onClick={() => {
+          void openAcademicAccess({ url: paper.url!, channel: 'public', paper_id: paper.id }).catch(error => toast.error(safeErrorMessage(error, '页面打开失败')))
+        }}><ExternalLink className="w-3.5 h-3.5" />{isChinese ? '网页获取 PDF' : 'Get PDF from page'}</button>}
         {paper.url && <a href={paper.url} target="_blank" rel="noopener noreferrer" className="paper-link"><ExternalLink className="w-3.5 h-3.5" />{isChinese ? '查看原文' : 'View Paper'}</a>}
         {paper.pdf_url && <a href={paper.pdf_url} target="_blank" rel="noopener noreferrer" className="paper-link paper-link-oa"><ExternalLink className="w-3.5 h-3.5" />PDF</a>}
         <input

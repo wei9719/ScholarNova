@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/assets/scholarnova-cover-en.svg" width="800" alt="ScholarNova — AI Research Workspace"></p>
 <p align="center"><a href="https://github.com/wei9719/ScholarNova/releases/latest">Download / 下载</a> · <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="docs/USER_MANUAL.zh-CN.md">产品与使用手册</a> · <a href="CHANGELOG.md">Changelog</a></p>
-<p align="center"><a href="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/ci.yml"><img src="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/desktop-release.yml"><img src="https://github.com/zhangweiguo9719-web/ScholarNova/actions/workflows/desktop-release.yml/badge.svg" alt="Desktop builds"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/Own_source-MIT-d4a84f" alt="项目自有源代码：MIT"></a> <a href="docs/DESKTOP_LICENSE_REVIEW.md"><img src="https://img.shields.io/badge/Desktop_combination-AGPLv3-536b82" alt="桌面发行组合：AGPLv3"></a></p>
+<p align="center"><a href="https://github.com/wei9719/ScholarNova/actions/workflows/ci.yml"><img src="https://github.com/wei9719/ScholarNova/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://github.com/wei9719/ScholarNova/actions/workflows/desktop-release.yml"><img src="https://github.com/wei9719/ScholarNova/actions/workflows/desktop-release.yml/badge.svg" alt="Desktop builds"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/Own_source-MIT-d4a84f" alt="项目自有源代码：MIT"></a> <a href="docs/DESKTOP_LICENSE_REVIEW.md"><img src="https://img.shields.io/badge/Desktop_combination-AGPLv3-536b82" alt="桌面发行组合：AGPLv3"></a></p>
 
 # ScholarNova
 
@@ -10,7 +10,7 @@
 
 **跟着真实场景学使用**：[完整研究案例使用手册（Word）](docs/guides/ScholarNova完整研究案例使用手册.docx)以 METR-LA 交通速度缺失修复为研究点，配合实际界面，逐步讲解检索、全文阅读、九章笔记、知识积累、分类问答、研究路线与导出，并提供提问示例、复现检查表和验收方法。该 Word 手册对应 **1.2.12**；新增期刊发现、授权浏览和原文伴读，请看[在线手册第 12 节](docs/USER_MANUAL.zh-CN.md#12-1213期刊发现授权全文和原文伴读)与[1.2.13 使用案例](docs/releases/v1.2.13-guided-reading.zh-CN.md)。
 
-**当前源码：1.2.13，公开安装包仍以 Release 附件为准。** 本轮增加主动查询的相关期刊、独立授权全文窗口，以及智能体中的按页伴读和 2–5 篇本地全文写作样例对照。先核对材料，再生成解释；阅读笔记、基础知识和技能卡继续使用同一个知识库。详见 [1.2.13 使用案例与边界](docs/releases/v1.2.13-guided-reading.zh-CN.md)。此前的 [阅读笔记](docs/reports/v1.2.12-research-notebook.zh-CN.md)、[检索与相似推荐优化](docs/reports/v1.2.11-search-recommendations.zh-CN.md)、[真实业务验收](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md)、[并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md)和[同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md)保留。已安装软件需通过对应安装包升级；本轮源码和 Windows 测试不代表新 macOS 包已构建或真实校园订阅已验收。
+**当前版本 [1.2.13 已正式发布](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.13)**，提供 Windows Setup/便携版，以及 Intel Mac、Apple Silicon Mac 的 DMG/ZIP。三个平台均通过原生构建与应用/后端启动检查，最新下载已指向本版。本轮增加主动查询的相关期刊、独立授权全文窗口，以及智能体中的按页伴读和 2–5 篇本地全文写作样例对照；继续使用同一个知识库保存阅读笔记、基础知识和技能卡。操作见[1.2.13 使用案例](docs/releases/v1.2.13-guided-reading.zh-CN.md)，真实 GLM/Qwen 任务、失败与发行记录见[本轮验收报告](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md)。学校订阅登录仍需用户授权与逐站点核验，不能以公开论文测试代替。
 
 ### 1.2.13 从哪里开始
 
@@ -24,26 +24,24 @@
 
 校园窗口使用应用内独立直连会话，公共窗口沿用系统网络，不更改系统 VPN；账号授权仍由用户完成。导入 PDF 只在本地保存与解析，点击 AI 任务后才发送对应页面或选段。扫描件目前不自动 OCR；图表与公式解释需要在设置中明确配置支持图像输入的视觉模型。学习建议和阅读推荐不是掌握程度证明。
 
-**历史真实 API 验证（10 月 3 日）**：38 次文本请求尝试中 34 次完成、4 次返回 429，服务商报告 50,573 Token，另完成 2 张路线图片。六任务/并发三的小样本总耗时从约 56 秒降到 34 秒；公开论文复测实际读取文字节选和 3 个图表页。当时发现的复杂检索问题在 1.2.11 中针对交通流等场景修复并复测，不等于所有学科检索质量均已验证，也不代表极限并发容量。此前的 [短文本探测及 Semantic Scholar 匿名限流记录](docs/reports/live-api-scenarios-2026-10-03.zh-CN.md) 单独保留。
+历史记录：[阅读笔记 1.2.12](docs/reports/v1.2.12-research-notebook.zh-CN.md)、[检索优化 1.2.11](docs/reports/v1.2.11-search-recommendations.zh-CN.md)、[10 月 3 日真实业务测试](docs/reports/v1.2.10-live-business-acceptance.zh-CN.md)、[并发治理](docs/reports/v1.2.7-concurrency.zh-CN.md)与[同类项目对标](docs/research/peer-landscape-2026-10-02.zh-CN.md)。历史数据不作为本版性能承诺。
 
 ## 下载与安装
 
-**历史公开版本 [v1.2.5](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.5)** 提供 Windows x64、Intel Mac、Apple Silicon Mac 安装包、Windows 便携版，以及同版本源码和 SHA256 校验文件。详见[该版发布与验收报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。新功能需要对应版本安装包，不能依据最新源码版本推定某平台安装包已发布。
-
-到 **[GitHub Releases 下载已发布安装包](https://github.com/wei9719/ScholarNova/releases/latest)**，展开 Assets，按你的电脑选择。v1.2.5 已通过三个桌面平台的自动构建和启动检查。
+到 **[v1.2.13 正式下载页](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.13)**，展开 Assets，按你的电脑选择。也可使用[最新版本入口](https://github.com/wei9719/ScholarNova/releases/latest)。本版八项资产已上传，包括两个 Windows 可执行文件、两种 Mac 架构各 DMG/ZIP、同版本对应源码 ZIP 和 `SHA256SUMS.txt`；[三平台发布工作流](https://github.com/wei9719/ScholarNova/actions/runs/38919441705)已成功。
 
 **社区桌面版采用已选择的 AGPL 开源发行路线。** 每个版本须包含逐包许可声明和相应源码，并通过自动源码检查及 Windows / macOS 启动测试后才能发布。详见 [发行要求](docs/DESKTOP_LICENSE_REVIEW.md)；可下载版本以同版本 Release 的实际附件为准，旧安装包不会自动包含最新源码改动。
 
 | 你的电脑 | 选择文件 | 安装方法 |
 | --- | --- | --- |
-| Windows 10/11，64 位 | `ScholarNova-Setup-版本-x64.exe` | 运行安装向导，创建桌面与开始菜单快捷方式 |
-| Windows 免安装 | `ScholarNova-Portable-版本-x64.exe` | 放在固定目录后双击运行 |
-| macOS 13+，Apple Silicon（M 系列） | `ScholarNova-版本-arm64.dmg` | 拖入“应用程序” |
-| macOS 13+，Intel | `ScholarNova-版本-x64.dmg` | 拖入“应用程序” |
+| Windows 10/11，64 位 | [Setup 安装版](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-Setup-1.2.13-x64.exe) | 运行安装向导，创建桌面与开始菜单快捷方式 |
+| Windows 免安装 | [Portable 便携版](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-Portable-1.2.13-x64.exe) | 放在固定目录后双击运行 |
+| macOS 13+，Apple Silicon（M 系列） | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-arm64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-arm64.zip) | 将应用拖入“应用程序”；ZIP 先解压 |
+| macOS 13+，Intel | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-x64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-x64.zip) | 将应用拖入“应用程序”；ZIP 先解压 |
 
 桌面版自带界面、本地后端和 SQLite，无需安装 Python、Node.js 或 Docker。首次启动可能因解压运行时稍慢。升级前退出应用，安装新版本；个人数据位于用户目录，不在安装目录内。
 
-Windows 日常使用优先选择 **Setup 安装版**。v1.2.5 便携版调整解压方式后，本机完整启动检查两次为 74.50 / 63.47 秒，均通过；此前两次超过 120 秒。新包下载体积较大，且便携版仍需解压，不能保证所有电脑快速启动。
+Windows 日常使用优先选择 **Setup 安装版**。便携版首次启动需要解压，耗时受设备和磁盘影响；自动启动检查不等于所有设备的性能承诺。升级与真实模型验收见[本版报告](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md)；早期指导重试记录保留在[1.2.5 报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。
 
 本版要求 macOS 13 或更新系统，依据 [Electron 44 官方平台要求](https://www.electronjs.org/blog/electron-44-0)。
 
@@ -61,7 +59,7 @@ Windows 日常使用优先选择 **Setup 安装版**。v1.2.5 便携版调整解
 
 **想少看无摘要结果，或寻找写作参考？** 搜索后点击结果列表的“有摘要”；该筛选只作用于当前返回结果，同词重新搜索也会复位。打开论文详情的“相似论文”，选择“研究内容相近”“摘要结构参考”或“同刊相似论文”。推荐查询 OpenAlex 和 Crossref，不调用生成模型；“展开原始摘要”用于对照写法，“在本页查看与分析”可继续阅读。匹配分不是概率，同刊频次不是全刊统计，摘要缺失也不等于论文没有摘要。
 
-**不知道智能体怎么用？** 先问“我该如何使用你”，再追问“那下一步呢”，并告诉它你卡在哪一步。v1.2.5 源码使用精简产品说明与最近对话调用你选定的智能体模型，模型阶段最多等待 60 秒、输出上限 320 Token。最新指导失败时可点击“再次调用 AI”：只替换失败回答，保留前次请求与用量记录。未返回用量表示未知，不等于免费；具体科研问题仍需要真实材料。下载请查看 Release 的实际版本，旧安装包不会自动更新。[本轮验收报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)
+**不知道智能体怎么用？** 普通知识库问答中先问“我该如何使用你”，再说明卡在哪一步。产品指导保留精简说明、最近对话及失败后的“再次调用 AI”，未返回用量表示未知，不等于免费；具体科研问题仍需要真实材料。要逐段读论文，从论文详情点击“原文伴读”，按页选择任务。[本版操作与验收](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md)
 
 ## 产品预览
 
@@ -134,7 +132,7 @@ React + TypeScript 构建界面，Electron 提供桌面外壳，FastAPI 编排�
 
 ## 反馈与参与
 
-欢迎通过 [Issues](https://github.com/zhangweiguo9719-web/ScholarNova/issues) 提交使用问题，附上系统版本、应用版本、操作步骤和脱敏错误信息。不要附上 API Key 或私有论文。开发贡献见 [CONTRIBUTING](CONTRIBUTING.md)，安全反馈见 [SECURITY](SECURITY.md)。
+欢迎通过 [Issues](https://github.com/wei9719/ScholarNova/issues) 提交使用问题，附上系统版本、应用版本、操作步骤和脱敏错误信息。不要附上 API Key 或私有论文。开发贡献见 [CONTRIBUTING](CONTRIBUTING.md)，安全反馈见 [SECURITY](SECURITY.md)。
 
 ## 开源许可
 

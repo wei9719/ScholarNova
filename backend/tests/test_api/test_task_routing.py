@@ -21,6 +21,14 @@ class _ScalarResult:
     def scalar_one_or_none(self):
         return self.value
 
+    def scalars(self):
+        # Research analysis now snapshots all selected ORM rows in one query;
+        # recommendation still uses the scalar lookup above.
+        return self
+
+    def all(self):
+        return [] if self.value is None else [self.value]
+
 
 class _KnowledgeDB:
     def __init__(self, item):
@@ -37,6 +45,9 @@ def _knowledge_item():
         title="Grounded retrieval",
         category="Method",
         content="The saved note describes evidence-grounded retrieval.",
+        card_type=None,
+        card_data=None,
+        notes=None,
         research_points=["citation verification"],
         tags=["RAG"],
     )

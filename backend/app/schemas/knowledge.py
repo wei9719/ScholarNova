@@ -196,6 +196,8 @@ class AIAnalyzeResponse(BaseModel):
     analysis: str = Field(..., description="AI生成的分析结果（中文）")
     architecture_json: Optional[dict] = Field(None, description="AI评判提炼的统一架构 JSON（层/模块/公式），用于确定性 SVG 渲染")
     knowledge_count: int = Field(..., description="分析的知识点数量")
+    coverage: Optional[str] = Field(None, description="实际选入的笔记字段、字符范围与固定预算；不代表读取论文全文")
+    warnings: list[str] = Field(default_factory=list, description="有界选材、未覆盖材料与事实身份提示")
     provider: Optional[str] = Field(None, description="实际使用的模型提供商")
     model: Optional[str] = Field(None, description="实际使用的模型")
     model_completed: bool = Field(True, description="模型是否完成分析")

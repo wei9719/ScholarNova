@@ -1,6 +1,7 @@
 """Search precision regressions: offline metadata and mocked real request paths."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,6 +24,86 @@ LONG_QUESTION = "2023年至今使用预训练大语言模型修复道路交通�
 
 def paper(identifier, title, abstract=None, **kwargs):
     return Paper(id=identifier, title=title, abstract=abstract, source="openalex", **kwargs)
+
+
+@pytest.mark.parametrize(
+    "name,minimum,maximum",
+    [("GSF-LLM", 0.0, 0.35), ("GATGPT", 0.7, 1.0), ("STD-PLM", 0.45, 0.69),
+     ("NuwaTS", 0.45, 0.69)],
+)
+async def test_v4_live_metadata_distinguishes_current_imputation_from_future_extension(
+    name, minimum, maximum,
+):
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "search_task_claims_v4.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    record = next(item for item in fixture["papers"] if item["title"].startswith(name))
+    observed = Paper.model_validate(record)
+    ranker = Ranker()
+    score = await ranker._calculate_relevance(observed, fixture["query"])
+    assert minimum <= score <= maximum
+    preference = Constraint(key="task_type", operator="eq", value="imputation")
+    assert ranker._calculate_constraint_score(observed, [preference]) == (
+        0.0 if name == "GSF-LLM" else 1.0
+    )
+    ranked = await ranker.rank([observed], fixture["query"], minimum_relevance=0.45)
+    assert bool(ranked) is (name != "GSF-LLM")
+
+
+@pytest.mark.parametrize(
+    "abstract,expected",
+    [
+        ("Experiments show improved traffic prediction, showing strong potential for extension "
+         "to data imputation, trajectory generation, and anomaly detection.", "prospective_only"),
+        ("Future work will explore data imputation.", "prospective_only"),
+        ("Our model can be extended to imputation.", "prospective_only"),
+        ("Our model could impute missing traffic data.", "prospective_only"),
+        ("In future work, our model may support imputation.", "prospective_only"),
+        ("Future work makes our model capable of implementing imputation.", "prospective_only"),
+        ("Data imputation remains future work.", "prospective_only"),
+        ("Our model performs forecasting, and imputation is left for future work.",
+         "prospective_only"),
+        ("Our model performs forecasting, with potential applications in data imputation.",
+         "prospective_only"),
+        ("未来工作将探索交通流数据插补。", "prospective_only"),
+        ("本文实现交通流预测，未来可扩展到缺失值插补。", "prospective_only"),
+        ("We propose a model for traffic imputation. Future work will expand forecasting.",
+         "current"),
+        ("We propose traffic imputation, while future work extends imputation to other domains.",
+         "current"),
+        ("Future work explores forecasting, whereas we demonstrate traffic imputation now.",
+         "current"),
+        ("Our model is capable of implementing both forecasting and imputation tasks.", "current"),
+        ("Once trained, our model can be applied to impute missing data across domains.", "current"),
+        ("We train language models to recover missing traffic values.", "current"),
+        ("We evaluate not only imputation but also forecasting.", "current"),
+        ("本文提出交通流缺失值插补方法，实验结果表明方法有效。", "current"),
+        ("Our model does not support imputation.", "unknown"),
+        ("Our model is not evaluated on imputation.", "unknown"),
+        ("Imputation is an important problem in transportation.", "unknown"),
+        ("We propose graph repair for traffic forecasting, showing potential for extension "
+         "to data imputation.", "prospective_only"),
+        ("", "unknown"),
+    ],
+)
+def test_paper_task_claim_scope_preserves_present_dual_tasks_and_unknown(abstract, expected):
+    ranker = Ranker()
+    observed = paper("scope", "A traffic language model", abstract)
+    assert ranker._paper_task_claim(observed.title, abstract, "imputation") == expected
+    preference = Constraint(key="task_type", operator="eq", value="imputation")
+    assert ranker._calculate_constraint_score(observed, [preference]) == (
+        1.0 if expected == "current" else 0.0
+    )
+    assert ranker.filter_hard_constraints([observed], [preference]) == [observed]
+
+
+def test_paper_task_claim_does_not_modify_future_research_query_intent():
+    assert QueryPlanner.search_facets("未来我想研究交通流大语言模型插补")["task"] == "imputation"
+    assert Ranker._paper_task_claim("Future work on LLM traffic imputation", "", "imputation") == (
+        "prospective_only"
+    )
 
 
 @pytest.mark.parametrize("query", [QUESTION, LONG_QUESTION])

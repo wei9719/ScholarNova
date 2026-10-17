@@ -1,0 +1,51 @@
+{
+  "source": "v4-search-four-source-final.json",
+  "query": "交通流数据在大语言模型下的缺失修复",
+  "note": "Verbatim title/abstract metadata from the 2026-10-17 live result. Scores are the pre-fix observations, not expected values.",
+  "papers": [
+    {
+      "id": "c06110af-eab0-54e8-b792-8e0910d29ac8",
+      "title": "GSF-LLM: Graph-Enhanced Spatio-Temporal Fusion-Based Large Language Model for Traffic Prediction",
+      "abstract": "Accurate traffic prediction is essential for intelligent transportation systems, urban mobility management, and traffic optimization. However, existing deep learning approaches often struggle to jointly capture complex spatial dependencies and temporal dynamics, and they are prone to overfitting when modeling large-scale traffic networks. To address these challenges, we propose the GSF-LLM (graph-enhanced spatio-temporal fusion-based large language model), a novel framework that integrates large language models (LLMs) with graph-based spatio-temporal learning. GSF-LLM employs a spatio-temporal fusion module to jointly encode spatial and temporal correlations, combined with a partially frozen graph attention (PFGA) mechanism to model topological dependencies while mitigating overfitting. Furthermore, a low-rank adaptation (LoRA) strategy is adopted to fine-tune a subset of LLM parameters, improving training efficiency and generalization. Experiments on multiple real-world traffic datasets demonstrate that GSF-LLM consistently outperforms state-of-the-art baselines, showing strong potential for extension to related tasks such as data imputation, trajectory generation, and anomaly detection.",
+      "year": 2025,
+      "citation_count": 7,
+      "is_open_access": true,
+      "source": "openalex",
+      "relevance_score": 0.8,
+      "ranking_score": 0.7835
+    },
+    {
+      "id": "da1fd943-fb03-5bbb-9779-201605c1274a",
+      "title": "GATGPT: A Pre-trained Large Language Model with Graph Attention Network for Spatiotemporal Imputation",
+      "abstract": "The analysis of spatiotemporal data is increasingly utilized across diverse domains, including transportation, healthcare, and meteorology. In real-world settings, such data often contain missing elements due to issues like sensor malfunctions and data transmission errors. The objective of spatiotemporal imputation is to estimate these missing values by understanding the inherent spatial and temporal relationships in the observed multivariate time series. Traditionally, spatiotemporal imputation has relied on specific, intricate architectures designed for this purpose, which suffer from limited applicability and high computational complexity. In contrast, our approach integrates pre-trained large language models (LLMs) into spatiotemporal imputation, introducing a groundbreaking framework, GATGPT. This framework merges a graph attention mechanism with LLMs. We maintain most of the LLM parameters unchanged to leverage existing knowledge for learning temporal patterns, while fine-tuning the upper layers tailored to various applications. The graph attention component enhances the LLM's ability to understand spatial relationships. Through tests on three distinct real-world datasets, our innovative approach demonstrates comparable results to established deep learning benchmarks.",
+      "year": 2023,
+      "citation_count": 7,
+      "is_open_access": true,
+      "source": "openalex",
+      "relevance_score": 0.8,
+      "ranking_score": 0.7481
+    },
+    {
+      "id": "1e77949c-6c57-5389-841a-749a870bea69",
+      "title": "STD-PLM: Understanding Both Spatial and Temporal Properties of Spatial-Temporal Data with PLM",
+      "abstract": "Spatial-temporal forecasting and imputation are important for real-world intelligent systems. Most existing methods are tailored for individual forecasting or imputation tasks but are not designed for both. Additionally, they are less effective for zero-shot and few-shot learning. While pre-trained language model (PLM) have exhibited strong pattern recognition and reasoning abilities across various tasks, including few-shot and zero-shot learning, their applications in spatial-temporal data understanding has been constrained by insufficient modeling of complex correlations such as the temporal correlations, spatial connectivity, non-pairwise and high-order spatial-temporal correlations within data. In this paper, we propose STD-PLM for understanding both spatial and temporal properties of Spatial-Temporal Data with PLM, which is capable of implementing both spatial-temporal forecasting and imputation tasks. STD-PLM understands spatial-temporal correlations via explicitly designed spatial and temporal tokenizers. Topology-aware node embeddings are designed for PLM to comprehend and exploit the topology structure of data in inductive manner. Furthermore, to mitigate the efficiency issues introduced by the PLM, we design a sandglass attention module(SGA) combined with a specific constrained loss function, which significantly improves the model's efficiency while ensuring performance. Extensive experiments demonstrate that STD-PLM exhibits competitive performance and generalization capabilities across the forecasting and imputation tasks on various datasets. Moreover, STD-PLM achieves promising results on both few-shot and zero-shot tasks.",
+      "year": 2025,
+      "citation_count": 18,
+      "is_open_access": true,
+      "source": "openalex",
+      "relevance_score": 0.45,
+      "ranking_score": 0.6481
+    },
+    {
+      "id": "e17dba46-51be-55e2-a7d5-09bd5b4ebe2a",
+      "title": "NuwaTS: a Foundation Model Mending Every Incomplete Time Series",
+      "abstract": "Time series imputation is critical for many real-world applications and has been widely studied. However, existing models often require specialized designs tailored to specific missing patterns, variables, or domains which limits their generalizability. In addition, current evaluation frameworks primarily focus on domain-specific tasks and often rely on time-wise train/validation/test data splits, which fail to rigorously assess a model's ability to generalize across unseen variables or domains. In this paper, we present \\textbf{NuwaTS}, a novel framework that repurposes Pre-trained Language Models (PLMs) for general time series imputation. Once trained, NuwaTS can be applied to impute missing data across any domain. We introduce specialized embeddings for each sub-series patch, capturing information about the patch, its missing data patterns, and its statistical characteristics. By combining contrastive learning with the imputation task, we train PLMs to create a versatile, one-for-all imputation model. Additionally, we employ a plug-and-play fine-tuning approach, enabling efficient adaptation to domain-specific tasks with minimal adjustments. To evaluate cross-variable and cross-domain generalization, we propose a new benchmarking protocol that partitions the datasets along the variable dimension. Experimental results on over seventeen million time series samples from diverse domains demonstrate that NuwaTS outperforms state-of-the-art domain-specific models across various datasets under the proposed benchmarking protocol. Furthermore, we show that NuwaTS generalizes to other time series tasks, such as forecasting. Our codes are available at https://github.com/Chengyui/NuwaTS.",
+      "year": 2024,
+      "citation_count": 0,
+      "is_open_access": true,
+      "source": "openalex",
+      "relevance_score": 0.45,
+      "ranking_score": 0.5522
+    }
+  ]
+}

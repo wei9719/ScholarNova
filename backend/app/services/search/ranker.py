@@ -299,7 +299,8 @@ class Ranker:
                 domain_hit = bool(
                     re.search(r"\b(?:traffic|transportation|road|pems\d*|metr(?:-la)?)\b", evidence)
                 )
-            task_hit = not facets["task"] or QueryPlanner.task_evidence(evidence, facets["task"])
+            task_claim = self._paper_task_claim(title, abstract, facets["task"])
+            task_hit = not facets["task"] or task_claim == "current"
             if not domain_hit:
                 # An explicit model+task match may be a transferable method,
                 # but absent domain words never become proof of that domain.
@@ -308,18 +309,21 @@ class Ranker:
                 return (
                     0.9
                     if (
-                        domain <= title_tokens and QueryPlanner.task_evidence(title, facets["task"])
+                        domain <= title_tokens
+                        and self._paper_task_claim(title, "", facets["task"]) == "current"
                     )
                     else 0.8
                 )
             if task_hit:
                 return 0.55 if domain else 0.25  # useful domain/task baseline, not an LLM answer
             other_task = any(
-                QueryPlanner.task_evidence(evidence, task)
+                self._paper_task_claim(title, abstract, task) == "current"
                 for task in QueryPlanner._TASK_SYNONYMS
                 if task != facets["task"]
             )
-            return (0.35 if other_task else 0.45) if method_hit else 0.15
+            return (
+                0.35 if other_task or task_claim == "prospective_only" else 0.45
+            ) if method_hit else 0.15
 
         def coverage(terms: set[str]) -> float:
             return sum(
@@ -424,6 +428,79 @@ class Ranker:
 
         return min(base_score, 1.0)
 
+    @staticmethod
+    def _paper_task_claim(title: str, abstract: str, task: str) -> str:
+        """Classify metadata claims, not verified full-paper experiments or query intent.
+
+        Future scope is local to each task mention: a present imputation claim
+        must survive a separate future forecasting clause, and vice versa.
+        Background-only or negated mentions remain unknown, not hard failures.
+        """
+        from app.services.search.query_planner import QueryPlanner
+
+        if task not in QueryPlanner._TASK_SYNONYMS:
+            return "unknown"
+        task_pattern = (
+            r"\b(?:imput(?:ation|ing|e)|data (?:completion|reconstruction|recovery))\b|"
+            r"\b(?:repair|reconstruct|recover|fill|complet)\w*(?:\W+\w+){0,6}\W+missing\b|"
+            r"\bmissing(?:\W+\w+){0,6}\W+(?:repair|reconstruct|recover|fill|complet)\w*\b"
+            if task == "imputation"
+            else r"\b(?:" + "|".join(map(re.escape, QueryPlanner._TASK_SYNONYMS[task])) + r")\b"
+        )
+        future = re.compile(
+            r"\b(?:future (?:work|research|studies|directions?)|prospects? for|"
+            r"potential (?:for|of|to|applications? (?:in|to|for))|(?:may|might|could|will|would)\s+"
+            r"(?:also\s+)?(?:be\s+)?(?:extend\w*|expand\w*|explor\w*|investigat\w*|consider\w*|"
+            r"appl\w*|imput\w*|perform\w*|implement\w*|support\w*)|can be extend\w*|"
+            r"(?:plan|intend|aim)\s+to)\b|未来|今后|后续(?:工作|研究)|有望|可望|潜力|计划|拟将"
+        )
+        negative = re.compile(
+            r"\b(?:not|never|cannot|can't|doesn't|don't|isn't|aren't|without|no)\b"
+            r"(?!\s+only\b)(?:\W+\w+){0,6}\W*$|(?:尚未|并未|未能|不能|不支持|未实现|未评估).{0,24}$"
+        )
+        future_after = re.compile(
+            r"^\s*(?:(?:is|are|remains?)\s+(?:only\s+)?(?:a\s+)?(?:future|potential)|"
+            r"(?:is|are)\s+(?:left|deferred|reserved|planned)(?:\s+\w+){0,4}\s+future\b|"
+            r"(?:in|as)\s+(?:a\s+)?future (?:work|direction|extension)|"
+            r"(?:will|would|could|may|might)\b|(?:仍是未来|作为未来|留待|留作|有待|将在|计划))"
+        )
+        current = re.compile(
+            r"\b(?:we\s+(?:propose|present|introduce|develop|design|integrate|repurpose|train|"
+            r"evaluate|test|show|demonstrate|implement|perform)|"
+            r"our\s+(?:proposed\s+)?(?:approach|method|framework|model|system)\s+"
+            r"(?:(?:also|directly|jointly)\s+)?(?:integrates|supports|implements|performs|"
+            r"achieves|repurposes|handles|estimates|imputes|uses)|"
+            r"capable of\s+(?:implementing|performing|handling|imputing)|"
+            r"(?:is|are|was|were)\s+(?:evaluated|tested|trained)|can be applied to|"
+            r"(?:experiments?|experimental results|evaluations?|benchmarks?).{0,80}?"
+            r"(?:demonstrate|show|confirm))\b|"
+            r"(?:本文|本研究|我们|本方法|该方法|所提模型).{0,45}?(?:提出|实现|设计|构建|验证|用于|完成|支持)|"
+            r"(?:实验|评估|结果).{0,25}?(?:表明|证明|显示|验证)"
+        )
+        prospective = False
+        for text, is_title in ((title, True), (abstract, False)):
+            normalized = QueryPlanner._translate_to_english(text).casefold()
+            for sentence in re.split(r"[.!?。！？；;\n]+", normalized):
+                if not QueryPlanner.task_evidence(sentence, task):
+                    continue
+                for mention in re.finditer(task_pattern, sentence):
+                    prefix, suffix = sentence[:mention.start()], sentence[mention.end():]
+                    if negative.search(prefix):
+                        continue
+                    scopes = list(future.finditer(sentence[:mention.end()]))
+                    # Only an explicit contrasting clause can reset future scope.
+                    # "In future work, our model ..." is still future, not a reset.
+                    contrast = (
+                        re.split(r"\b(?:but|however|whereas|while|yet)\b|但是|但", prefix[scopes[-1].end():])
+                        if scopes else []
+                    )
+                    reset = len(contrast) > 1 and current.search(contrast[-1])
+                    if (scopes and not reset) or future_after.search(suffix):
+                        prospective = True
+                    elif is_title or current.search(sentence):
+                        return "current"
+        return "prospective_only" if prospective else "unknown"
+
     def _calculate_constraint_score(
         self,
         paper: Paper,
@@ -495,12 +572,11 @@ class Ranker:
         """检查单个约束是否满足"""
         try:
             if key == "task_type":
-                from app.services.search.query_planner import QueryPlanner
                 # This is only title/abstract evidence, never a claim to have
                 # verified the actual experiments in a full paper.
-                return operator == "eq" and QueryPlanner.task_evidence(
-                    f"{paper.title or ''}\n{paper.abstract or ''}", str(value).casefold(),
-                )
+                return operator == "eq" and self._paper_task_claim(
+                    paper.title or "", paper.abstract or "", str(value).casefold(),
+                ) == "current"
             if key == "publication_date":
                 boundary = date.fromisoformat(str(value))
                 observed = paper.publication_date

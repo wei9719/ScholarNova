@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Sparkles, Loader2, AlertCircle,
   FolderOpen, ChevronDown, ChevronRight, CheckCircle,
@@ -45,6 +45,12 @@ function restoreAnalysis(): AnalysisSnapshot | null {
 
 export default function KnowledgeAnalysis() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const entry = useRef(location.state?.startNewAnalysis === true ? {
+    category: typeof location.state.category === 'string' ? location.state.category : '',
+  } : null).current
+  const openedEntry = useRef(false)
+  const preservePreviousCache = useRef(Boolean(entry))
   const { t, locale } = useLocaleStore()
   const isChinese = locale === 'zh'
 
@@ -57,7 +63,7 @@ export default function KnowledgeAnalysis() {
   const [loading, setLoading] = useState(true)
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeElapsed, setAnalyzeElapsed] = useState(0)
-  const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(restoreAnalysis)
+  const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(() => entry ? null : restoreAnalysis())
   const result = snapshot?.result || null
   const [query, setQuery] = useState(snapshot?.query || '')
   const [saving, setSaving] = useState(false)
@@ -72,12 +78,17 @@ export default function KnowledgeAnalysis() {
 
   useEffect(() => {
     try {
-      if (snapshot) localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
-      else localStorage.removeItem(STORAGE_KEY)
+      if (snapshot) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+        preservePreviousCache.current = false
+        // Keep the category handoff on refresh until the new snapshot is
+        // actually persisted; an older direction's result must not reappear.
+        if (entry && location.state?.startNewAnalysis) navigate('/knowledge/analysis', { replace: true, state: null })
+      } else if (!preservePreviousCache.current) localStorage.removeItem(STORAGE_KEY)
     } catch {
       toast.error(isChinese ? '本地缓存空间不足，请及时保存研究路线' : 'Local cache unavailable. Please save the research route.')
     }
-  }, [snapshot, isChinese])
+  }, [snapshot, isChinese, entry, location.state, navigate])
 
   const fetchCategories = useCallback(async () => {
     setLoading(true)
@@ -133,6 +144,15 @@ export default function KnowledgeAnalysis() {
       await loadCategory(catName, 1)
     }
   }
+
+  useEffect(() => {
+    if (!entry || openedEntry.current) return
+    openedEntry.current = true
+    if (entry.category) {
+      setExpandedCategory(entry.category)
+      void loadCategory(entry.category, 1)
+    }
+  }, [entry])
 
   const toggleItem = (id: string) => {
     if (analyzing) return
@@ -240,6 +260,9 @@ export default function KnowledgeAnalysis() {
         <div className="max-w-4xl mx-auto px-4 py-6">
           {!result ? (
             <>
+              {entry?.category && <p role="status" className="mb-3 text-sm text-primary-600 dark:text-primary-300">
+                {isChinese ? `从研究分类“${entry.category}”继续：勾选资料并点击分析后才会调用模型。` : `Continuing from “${entry.category}”: a model is called only after selecting notes and starting analysis.`}
+              </p>}
               <div className="mb-4">
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
                   {isChinese ? '选择与研究问题相关的知识点，每轮最多 50 条。分析基于知识摘录，不代表阅读了完整论文。' : 'Select up to 50 relevant notes. Analysis uses note excerpts, not full papers.'}
@@ -363,6 +386,14 @@ export default function KnowledgeAnalysis() {
                 <span>Token {result.total_tokens || 0}</span>
               </div>
 
+              {result.coverage && <section aria-label={isChinese ? '本次实际取材范围' : 'Material actually supplied'} className="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 p-3 text-sm text-gray-600 dark:text-gray-300">
+                <h3 className="mb-1 font-medium">{isChinese ? '本次实际取材范围' : 'Material actually supplied'}</h3>
+                <p>{result.coverage}</p>
+                {Boolean(result.warnings?.length) && <details className="mt-2">
+                  <summary>{isChinese ? '查看截断与未覆盖内容' : 'Truncation and omitted material'}</summary>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">{result.warnings?.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+                </details>}
+              </section>}
               <AnalysisViz
                 analysis={result.analysis || ''}
                 architectureJson={result.architecture_json || null}

@@ -59,6 +59,17 @@ async function analyze() {
   await screen.findByTestId('analysis')
 }
 
+it('discloses actual research-note material and omissions instead of implying full-paper reading', async () => {
+  mocks.aiAnalyze.mockResolvedValue({ data: { ...result,
+    coverage: '所选实验与个人想法节选，18000 字符预算；不是论文全文，未运行实验。',
+    warnings: ['概述仅选入首段，超长背景未全部提供。'],
+  } })
+  mount()
+  await analyze()
+  expect(screen.getByRole('region', { name: '本次实际取材范围' })).toHaveTextContent('所选实验与个人想法节选')
+  expect(screen.getByText('概述仅选入首段，超长背景未全部提供。')).toBeInTheDocument()
+})
+
 it('loads beyond 20, sends the actual requirement and saves full text only after review', async () => {
   const view = mount()
   fireEvent.click(await screen.findByRole('button', { name: /食品保鲜/ }))

@@ -14,6 +14,16 @@ const props = { open: true, editingItem: null, prefill: note, categories: [{ nam
 beforeEach(() => { vi.resetAllMocks(); useLocaleStore.getState().setLocale('zh'); api.create.mockResolvedValue({ data: note }); api.update.mockResolvedValue({ data: note }) })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
+it.each([false, true])('returns the server-confirmed note to continue the workflow (editing=%s)', async (editing) => {
+  const saved = { ...note, category: '服务器确认的研究分类', updated_at: '2026-10-17T21:00:00' }
+  api.create.mockResolvedValue({ data: saved })
+  api.update.mockResolvedValue({ data: saved })
+  render(<KnowledgeForm {...props} editingItem={editing ? note : null} />)
+  fireEvent.click(screen.getByRole('button', { name: '保存' }))
+  await waitFor(() => expect(props.onSuccess).toHaveBeenCalledWith(saved))
+  expect(editing ? api.update : api.create).toHaveBeenCalledOnce()
+})
+
 it('preserves chapter edits across tabs and same-paper prefill rerenders, saving without condensation', async () => {
   const { rerender } = render(<KnowledgeForm {...props} />)
   fireEvent.change(screen.getByLabelText('我的想法'), { target: { value: '我的实验假设' } })

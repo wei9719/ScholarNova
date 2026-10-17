@@ -25,6 +25,7 @@ import KnowledgeForm from '@/components/KnowledgeForm/KnowledgeForm'
 import SimilarPapers from '@/components/PaperDetail/SimilarPapers'
 import WritingSamplesPanel from './WritingSamplesPanel'
 import { useLocaleStore } from '@/stores/localeStore'
+import { useKnowledgeStore } from '@/stores/knowledgeStore'
 import { emptyEntry, readingNote } from '@/utils/studyNote'
 import { safeErrorMessage } from '@/utils/safeError'
 import './PaperReadingWorkspace.css'
@@ -88,6 +89,8 @@ const outputText = (turn: ReadingTurn) =>
     .join('\n\n')
 const locationText = (page: number, hash: string) =>
   `PDF 第 ${page} 页；文件版本 ${hash}`
+const noteTurnKey = (paperId: string, category: string, turn: ReadingTurn) =>
+  JSON.stringify([paperId, category.trim(), turn.id, turn.page, turn.hash])
 
 export default function PaperReadingWorkspace({
   paperId,
@@ -120,6 +123,15 @@ export default function PaperReadingWorkspace({
   const [elapsed, setElapsed] = useState(0)
   const [uploading, setUploading] = useState(false)
   const [turns, setTurns] = useState<ReadingTurn[]>([])
+  // Successful saves only: these markers deliberately live in this workspace,
+  // not in a new persistent schema or a global handwritten-text deduplicator.
+  const [savedTurns, setSavedTurns] = useState<Map<string, Set<string>>>(
+    () => new Map(),
+  )
+  const [lastSavedNote, setLastSavedNote] = useState<Pick<
+    KnowledgeItem,
+    'id' | 'category'
+  > | null>(null)
   const [showRecommendations, setShowRecommendations] = useState(false)
   const [showWritingSamples, setShowWritingSamples] = useState(false)
   const [writingSamplesActivated, setWritingSamplesActivated] = useState(false)
@@ -127,12 +139,15 @@ export default function PaperReadingWorkspace({
   const [form, setForm] = useState<{
     editing: KnowledgeItem | null
     prefill: Partial<KnowledgeItem> | null
+    readingTurn?: ReadingTurn
+    personalDraft?: string
   } | null>(null)
   const textRef = useRef<HTMLDivElement>(null)
   const responsesRef = useRef<HTMLDivElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
   const modelRequest = useRef<AbortController | null>(null)
   const noteRequest = useRef(0)
+  const turnSequence = useRef(0)
   const alive = useRef(true)
   const pageIdentity = useRef('')
   pageIdentity.current = `${paperId}:${document?.content_hash || ''}:${pageNumber}`
@@ -145,6 +160,11 @@ export default function PaperReadingWorkspace({
       noteRequest.current++
     }
   }, [])
+
+  useEffect(() => {
+    setSavedTurns(new Map())
+    setLastSavedNote(null)
+  }, [paperId])
 
   useEffect(() => {
     const request = new AbortController()
@@ -325,11 +345,12 @@ export default function PaperReadingWorkspace({
         modelRequest.current === request &&
         pageIdentity.current === identity
       ) {
+        const turnId = ++turnSequence.current
         setTurns((previous) =>
           [
             ...previous,
             {
-              id: Date.now(),
+              id: turnId,
               mode: input.mode,
               page: input.page_number,
               hash: input.content_hash,
@@ -405,12 +426,12 @@ export default function PaperReadingWorkspace({
       setError(zh ? '请先填写研究分类。' : 'Enter a research category first.')
       return
     }
-    const original = turn?.selection || selection.trim()
+    const original = turn ? turn.selection : selection.trim()
     const pageNo = turn?.page || pageNumber
     const hash = turn?.hash || document?.content_hash || ''
     const source = original ? `${locationText(pageNo, hash)}\n${original}` : ''
     const ai = turn
-      ? `${outputText(turn)}\n\n${locationText(pageNo, hash)}\n${turn.result.sources.map((item) => `[${item.label}] 第 ${item.page_number} 页\n${item.excerpt}`).join('\n\n')}\n\n材料范围：${turn.result.coverage}；模型 ${turn.result.provider || '—'}/${turn.result.model || '—'}；AI 建议，不代表论文事实。`
+      ? `${outputText(turn)}\n\n${locationText(pageNo, hash)}\n${turn.result.sources.map((item) => `[${item.label}] ${item.paper_id || paperId}；${locationText(item.page_number, item.content_hash)}\n${item.excerpt}`).join('\n\n')}\n\n材料范围：${turn.result.coverage}；模型 ${turn.result.provider || '—'}/${turn.result.model || '—'}；AI 建议，不代表论文事实。`
       : ''
     const metadata = {
       source_paper_id: paperId,
@@ -419,11 +440,13 @@ export default function PaperReadingWorkspace({
       category: targetCategory,
     }
     if (cardType !== 'reading_note') {
+      const titleQuestion = turn ? turn.question : question.trim()
       setForm({
         editing: null,
+        personalDraft: personal.trim(),
         prefill: {
           ...metadata,
-          title: `${cardType === 'foundation' ? (zh ? '基础知识' : 'Foundation') : zh ? '写作与阅读技能' : 'Writing & reading skill'}：${question.trim().slice(0, 80) || metadata.source_paper_title}`,
+          title: `${cardType === 'foundation' ? (zh ? '基础知识' : 'Foundation') : zh ? '写作与阅读技能' : 'Writing & reading skill'}：${titleQuestion.slice(0, 80) || metadata.source_paper_title}`,
           card_type: cardType,
           content: [
             source && `论文原文摘录\n${source}`,
@@ -459,9 +482,19 @@ export default function PaperReadingWorkspace({
       const section =
         modes.find((item) => item.key === turn?.mode)?.section || 'overview'
       const entry = notebook.sections[section] || emptyEntry()
+      const turnKey = turn
+        ? noteTurnKey(paperId, targetCategory, turn)
+        : undefined
+      const alreadySaved = Boolean(
+        existing && turnKey && savedTurns.get(turnKey)?.has(existing.id),
+      )
       const merged = {
-        paper_notes: [entry.paper_notes, source].filter(Boolean).join('\n\n'),
-        ai_suggestions: [entry.ai_suggestions, ai].filter(Boolean).join('\n\n'),
+        paper_notes: [entry.paper_notes, !alreadySaved && source]
+          .filter(Boolean)
+          .join('\n\n'),
+        ai_suggestions: [entry.ai_suggestions, !alreadySaved && ai]
+          .filter(Boolean)
+          .join('\n\n'),
         user_notes: [entry.user_notes, personal.trim()]
           .filter(Boolean)
           .join('\n\n'),
@@ -485,6 +518,8 @@ export default function PaperReadingWorkspace({
         },
       }
       setForm({
+        readingTurn: turn,
+        personalDraft: personal.trim(),
         editing: existing
           ? { ...existing, card_data: prefill.card_data }
           : null,
@@ -514,7 +549,11 @@ export default function PaperReadingWorkspace({
     else setPageInput(String(pageNumber))
   }
   const confirmLeave = () =>
-    !(turns.length || selection || personal.trim()) ||
+    !(
+      turns.some(
+        (turn) => !savedTurns.get(noteTurnKey(paperId, category, turn))?.size,
+      ) || personal.trim()
+    ) ||
     window.confirm(
       zh
         ? '当前伴读回答与个人记录可能尚未保存。确认离开吗？'
@@ -527,12 +566,7 @@ export default function PaperReadingWorkspace({
   const imageUrl = readerAssetUrl(page?.image_url, paperId)
   const title =
     document?.title || paper?.title || (zh ? '正在读取论文…' : 'Loading paper…')
-  const canAsk = Boolean(
-    page &&
-    !pageLoading &&
-    !busy &&
-    !uploading,
-  )
+  const canAsk = Boolean(page && !pageLoading && !busy && !uploading)
 
   return (
     <main
@@ -1115,7 +1149,13 @@ export default function PaperReadingWorkspace({
                     onClick={() => void openNote(turn)}
                   >
                     <Save size={14} />
-                    {zh ? '核对并加入阅读笔记' : 'Review in reading note'}
+                    {savedTurns.has(noteTurnKey(paperId, category, turn))
+                      ? zh
+                        ? '已整理，继续编辑'
+                        : 'Added · continue editing'
+                      : zh
+                        ? '核对并加入阅读笔记'
+                        : 'Review in reading note'}
                   </button>
                   <button
                     className="reader-button"
@@ -1186,11 +1226,30 @@ export default function PaperReadingWorkspace({
                 )}
                 {zh ? '打开 / 保存阅读笔记' : 'Open / save reading note'}
               </button>
+              {lastSavedNote && (
+                <>
+                  <span className="reader-status" role="status">
+                    {zh ? '已保存到' : 'Saved to'} {lastSavedNote.category}
+                  </span>
+                  <button
+                    className="reader-button"
+                    onClick={() => {
+                      if (!confirmLeave()) return
+                      const store = useKnowledgeStore.getState()
+                      store.setSelectedCategory(lastSavedNote.category)
+                      store.setSearchQuery('')
+                      navigate('/knowledge')
+                    }}
+                  >
+                    {zh ? '查看已保存笔记' : 'View saved note'}
+                  </button>
+                </>
+              )}
             </div>
             <p className="reader-status">
               {zh
-                ? '个人记录与 AI 建议分栏保存。此处输入和伴读回答尚未保存，离开前请在笔记编辑器中确认保存。'
-                : 'Personal notes and AI suggestions are separate. Save in the note editor before leaving this workspace.'}
+                ? '个人记录与 AI 建议分栏保存。新输入和未整理的回答需在编辑器中确认保存；已整理标记仅在当前工作区保留。'
+                : 'Keep personal notes separate from AI suggestions. Save new work in the editor; added-answer markers last only in this workspace.'}
             </p>
           </div>
         </section>
@@ -1201,14 +1260,34 @@ export default function PaperReadingWorkspace({
         prefill={form?.prefill || null}
         categories={categories}
         onClose={() => setForm(null)}
-        onSuccess={() => {
+        onSuccess={(saved?: KnowledgeItem) => {
+          if (saved) {
+            setLastSavedNote({ id: saved.id, category: saved.category })
+            if (
+              form?.readingTurn &&
+              saved.card_type === 'reading_note' &&
+              saved.source_paper_id === paperId
+            ) {
+              const key = noteTurnKey(paperId, saved.category, form.readingTurn)
+              setSavedTurns((previous) => {
+                const next = new Map(previous)
+                next.set(key, new Set([...(previous.get(key) || []), saved.id]))
+                return next
+              })
+            }
+          }
           void knowledgeApi
             .getCategories()
             .then(({ data }) => {
               if (alive.current) setCategories(data)
             })
             .catch(() => undefined)
-          setPersonal('')
+          setPersonal((value) =>
+            form?.personalDraft !== undefined &&
+            value.trim() === form.personalDraft
+              ? ''
+              : value,
+          )
         }}
       />
     </main>

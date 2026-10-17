@@ -17,7 +17,7 @@ interface KnowledgeFormProps {
   prefill: Partial<KnowledgeItem> | null
   categories: { name: string; count: number }[]
   onClose: () => void
-  onSuccess: () => void
+  onSuccess: (saved?: KnowledgeItem) => void
 }
 
 export default function KnowledgeForm({
@@ -117,7 +117,7 @@ export default function KnowledgeForm({
   }, [editingItem, prefill, open])
   const handleClose = () => {
     if (saving) return
-    if (polishReview) { onSuccess(); onClose(); return }
+    if (polishReview) { onSuccess(polishReview); onClose(); return }
     if (initial.current && snapshot() !== initial.current && !window.confirm(isChinese ? '笔记尚未保存，确定放弃本次修改？' : 'Discard unsaved changes?')) return
     onClose()
   }
@@ -194,10 +194,13 @@ export default function KnowledgeForm({
         ...(cardType === 'reading_note' ? { card_data: notebook } : editingItem?.card_type === cardType ? { card_data: editingItem.card_data } : {}),
       }
 
+      let saved: KnowledgeItem | undefined
       if (editingItem) {
-        await knowledgeApi.update(editingItem.id, { ...data, expected_updated_at: editingItem.updated_at })
+        const updated = await knowledgeApi.update(editingItem.id, { ...data, expected_updated_at: editingItem.updated_at })
+        saved = updated?.data
       } else {
         const created = await knowledgeApi.create(data)
+        saved = created?.data
         if (created.data?.polish_draft) {
           setPolishReview(created.data)
           toast.success(isChinese ? '原文已保存。AI 草稿尚未采用，请先核对。' : 'Original saved. Review the AI draft before applying it.')
@@ -205,7 +208,7 @@ export default function KnowledgeForm({
         }
       }
       toast.success(t('knowledge.saveSuccess'))
-      onSuccess()
+      onSuccess(saved)
       onClose()
     } catch (error) {
       toast.error(safeErrorMessage(error, t('knowledge.saveError')))
@@ -218,12 +221,12 @@ export default function KnowledgeForm({
     if (saving || !polishReview?.polish_draft) return
     setSaving(true)
     try {
-      await knowledgeApi.update(polishReview.id, {
+      const updated = await knowledgeApi.update(polishReview.id, {
         ...polishReview.polish_draft,
         expected_updated_at: polishReview.updated_at,
       })
       toast.success(t('knowledge.saveSuccess'))
-      onSuccess()
+      onSuccess(updated?.data)
       onClose()
     } catch (error) {
       toast.error(safeErrorMessage(error, t('knowledge.saveError')))

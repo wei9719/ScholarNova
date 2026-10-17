@@ -8,6 +8,7 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { useLocaleStore } from '@/stores/localeStore'
 import { useKnowledgeStore } from '@/stores/knowledgeStore'
+import { useAssistantStore } from '@/stores/assistantStore'
 import { knowledgeApi } from '@/api/client'
 import type { KnowledgeItem } from '@/api/types'
 import { readingNote } from '@/utils/studyNote'
@@ -141,6 +142,21 @@ export default function Knowledge() {
     fetchRoutes()
   }
 
+  const continueReading = (item: KnowledgeItem) => {
+    if (!item.source_paper_id) return
+    setDetailOpen(false)
+    navigate(`/assistant?paper=${encodeURIComponent(item.source_paper_id)}&category=${encodeURIComponent(item.category || '未分类')}`)
+  }
+
+  const discussCategory = (item: KnowledgeItem) => {
+    const category = item.category
+    if (!category?.trim()) return
+    const id = useAssistantStore.getState().createConversation()
+    useAssistantStore.getState().setKnowledgeCategory(id, category)
+    setDetailOpen(false)
+    navigate('/assistant')
+  }
+
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const totalRoutePages = Math.max(1, Math.ceil(routesTotal / pageSize))
@@ -186,7 +202,7 @@ export default function Knowledge() {
               />
             </div>
             <button
-              onClick={() => navigate('/knowledge/analysis')}
+              onClick={() => navigate('/knowledge/analysis', { state: { startNewAnalysis: true, category: selectedCategory } })}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-900/50 transition-colors"
             >
               <Sparkles className="w-4 h-4" />
@@ -407,6 +423,8 @@ export default function Knowledge() {
               onEdit={handleEdit}
               onDelete={handleDelete}
               onDerive={handleDerive}
+              onReadPaper={continueReading}
+              onDiscuss={discussCategory}
             />
           </div>
         </div>

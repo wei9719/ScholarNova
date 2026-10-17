@@ -16,10 +16,12 @@ interface KnowledgeDetailProps {
   onEdit: (item: KnowledgeItem) => void
   onDelete: (id: string) => void
   onDerive?: (prefill: Partial<KnowledgeItem>) => void
+  onReadPaper?: (item: KnowledgeItem) => void
+  onDiscuss?: (item: KnowledgeItem) => void
 }
 
 export default function KnowledgeDetail({
-  item, onClose, onEdit, onDelete, onDerive,
+  item, onClose, onEdit, onDelete, onDerive, onReadPaper, onDiscuss,
 }: KnowledgeDetailProps) {
   const { t, locale } = useLocaleStore()
   const isChinese = locale === 'zh'
@@ -115,6 +117,19 @@ export default function KnowledgeDetail({
           </div>
         )}
       </div>
+
+      {(onReadPaper && item.source_paper_id || onDiscuss && item.category?.trim()) && <div className="knowledge-detail-section">
+        <h4 className="knowledge-detail-section-title">{isChinese ? '继续研究' : 'Continue research'}</h4>
+        <div className="flex flex-wrap gap-2">
+          {onReadPaper && item.source_paper_id && <button onClick={() => onReadPaper(item)} className="knowledge-action-btn knowledge-action-route">
+            <BookOpen className="w-4 h-4" />{isChinese ? '继续阅读原文' : 'Continue reading the paper'}
+          </button>}
+          {onDiscuss && item.category?.trim() && <button onClick={() => onDiscuss(item)} className="knowledge-action-btn knowledge-action-route">
+            {isChinese ? '在此分类中提问' : 'Ask within this category'}
+          </button>}
+        </div>
+        <p className="mt-2 text-xs text-gray-500">{isChinese ? '沿用本条笔记的论文和研究分类；提问会新建独立对话，不自动发送问题。' : 'Keeps this note’s paper and category. Asking opens a separate conversation without sending a question.'}</p>
+      </div>}
 
       {/* Source Paper */}
       {(item.source_paper_title || item.source_paper_doi) && (

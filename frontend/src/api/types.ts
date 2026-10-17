@@ -595,10 +595,13 @@ export interface RouteCreateRequest {
 
 export interface AIAnalyzeRequest {
   knowledge_ids: string[]
+  query?: string
 }
 
 export interface AIAnalyzeResponse {
   analysis: string
+  coverage?: string | null
+  warnings?: string[]
   knowledge_count: number
   created_at: string
   provider?: string | null

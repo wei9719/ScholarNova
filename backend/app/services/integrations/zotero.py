@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +15,37 @@ ZOTERO_LOCAL_API = "http://127.0.0.1:23119/api"
 ZOTERO_CONNECTOR_API = "http://127.0.0.1:23119/connector"
 ZOTERO_API_VERSION = "3"
 _COLLECTION_KEY = re.compile(r"^[A-Za-z0-9]+$")
+_WRITE_LOCK = asyncio.Lock()
+
+
+def _doi_key(value: Any) -> str:
+    return re.sub(
+        r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)",
+        "",
+        str(value or "").strip(),
+        flags=re.IGNORECASE,
+    ).casefold()
+
+
+def _title_key(value: Any) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFKC", str(value or "")).casefold() if c.isalnum()
+    )
+
+
+def _paper_metadata_identity(wanted: dict[str, Any], existing: dict[str, Any]) -> bool | None:
+    """Without two matching DOIs, require a verifiable year and author set."""
+    years = [re.search(r"\b(?:18|19|20|21)\d{2}\b", str(data.get("date") or ""))
+             for data in (wanted, existing)]
+    authors = [frozenset(
+        _title_key(creator.get("name") or f"{creator.get('firstName') or ''} {creator.get('lastName') or ''}")
+        for creator in (data.get("creators") or [])
+        if isinstance(creator, dict) and creator.get("creatorType", "author") == "author"
+        and (creator.get("name") or creator.get("firstName") or creator.get("lastName"))
+    ) for data in (wanted, existing)]
+    if (all(years) and years[0].group() != years[1].group()) or (all(authors) and authors[0] != authors[1]):
+        return False
+    return True if all(years) and all(authors) else None
 
 
 class ZoteroUnavailableError(RuntimeError):
@@ -70,9 +103,7 @@ class ZoteroLocalClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise ZoteroClientError(
-                f"Zotero 本地 API 返回 HTTP {response.status_code}"
-            ) from exc
+            raise ZoteroClientError(f"Zotero 本地 API 返回 HTTP {response.status_code}") from exc
         return response
 
     async def _post(
@@ -106,11 +137,9 @@ class ZoteroLocalClient:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ZoteroClientError(
-                f"Zotero 本地 API 返回 HTTP {response.status_code}: "
-                f"{response.text[:160]}"
+                f"Zotero 本地 API 返回 HTTP {response.status_code}: {response.text[:160]}"
             ) from exc
         return response
-
 
     async def _connector_post(
         self,
@@ -136,8 +165,7 @@ class ZoteroLocalClient:
             )
         if response.status_code != expected_status:
             raise ZoteroClientError(
-                f"Zotero Connector 写入失败: HTTP {response.status_code} "
-                f"{response.text[:160]}"
+                f"Zotero Connector 写入失败: HTTP {response.status_code} {response.text[:160]}"
             )
         return response
 
@@ -178,7 +206,9 @@ class ZoteroLocalClient:
 
         wanted = collection_path(collection_key)
         if sum(collection_path(item["key"]) == wanted for item in collections) != 1:
-            raise ZoteroClientError("Zotero 中存在同路径同名文件夹，请先重命名后同步；未写入任何条目。")
+            raise ZoteroClientError(
+                "Zotero 中存在同路径同名文件夹，请先重命名后同步；未写入任何条目。"
+            )
         path: list[str] = []
         matches: list[str] = []
         for target in targets[1:]:
@@ -187,7 +217,7 @@ class ZoteroLocalClient:
                 break  # Do not match collections from a group library.
             if not isinstance(level, int) or level < 1 or level > len(path) + 1:
                 raise ZoteroClientError("Zotero 文件夹树无法解析，未写入任何条目。")
-            path = path[:level - 1] + [target.get("name", "")]
+            path = path[: level - 1] + [target.get("name", "")]
             if tuple(path) == wanted and re.fullmatch(r"C\d+", target.get("id", "")):
                 matches.append(target["id"])
         if len(matches) != 1:
@@ -207,8 +237,7 @@ class ZoteroLocalClient:
             connected=True,
             server_id=response.headers.get("Zotero-Server-ID"),
             zotero_version=(
-                response.headers.get("Zotero-Version")
-                or response.headers.get("X-Zotero-Version")
+                response.headers.get("Zotero-Version") or response.headers.get("X-Zotero-Version")
             ),
         )
 
@@ -321,7 +350,6 @@ class ZoteroLocalClient:
             and item["data"].get("itemType") not in excluded
         ]
 
-
     async def create_paper(
         self,
         *,
@@ -365,7 +393,90 @@ class ZoteroLocalClient:
             item["url"] = url.strip()[:1000]
         if abstract:
             item["abstractNote"] = abstract.strip()[:5000]
-        target = await self._save_target(collection_key)
+        async with _WRITE_LOCK:
+            # Connector target discovery also touches the single-user Zotero UI;
+            # keep preparation inside the same write lock to avoid probe bursts.
+            target = await self._save_target(collection_key)
+            return await self._save_paper(item, collection_key, target, pdf_path)
+
+    async def _find_existing_paper(
+        self,
+        item: dict[str, Any],
+        collection_key: str | None,
+    ) -> dict[str, Any] | None:
+        """Reuse only an identical paper already in the requested destination."""
+        path = (
+            f"/users/0/collections/{collection_key}/items/top"
+            if collection_key
+            else "/users/0/items/top"
+        )
+        wanted_doi = _doi_key(item.get("DOI"))
+        queries = list(dict.fromkeys(q for q in [wanted_doi, item["title"]] if q))
+        same_doi: dict[str, dict[str, Any]] = {}
+        title_candidates: dict[str, dict[str, Any]] = {}
+        for query in queries:
+            response = await self._get(
+                path, params={"q": query, "qmode": "everything", "limit": 100, "format": "json"}
+            )
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise ZoteroClientError("Zotero 查重返回了无效数据，未写入条目") from exc
+            if not isinstance(payload, list):
+                raise ZoteroClientError("Zotero 查重数据格式不正确，未写入条目")
+            for existing in payload:
+                if not isinstance(existing, dict) or not isinstance(existing.get("data"), dict):
+                    continue
+                data = existing["data"]
+                collections = data.get("collections", [])
+                in_target = collection_key in collections if collection_key else not collections
+                if not in_target or data.get("itemType") in {"attachment", "note", "annotation"}:
+                    continue
+                key = str(existing.get("key") or data.get("key") or "")
+                existing_doi = _doi_key(data.get("DOI"))
+                if wanted_doi and existing_doi:
+                    if existing_doi == wanted_doi:
+                        same_doi[key] = existing
+                    # Different explicit DOIs must not fall back to title.
+                    continue
+                if _title_key(data.get("title")) == _title_key(item["title"]):
+                    title_candidates[key] = existing
+        if same_doi:
+            if len(same_doi) != 1 or "" in same_doi:
+                raise ZoteroClientError("目标文件夹中有多个相同 DOI 或条目标识不完整，请先检查 Zotero；未新增或合并文献。")
+            return next(iter(same_doi.values()))
+        confirmed = []
+        uncertain = False
+        for key, candidate in title_candidates.items():
+            identity = _paper_metadata_identity(item, candidate["data"])
+            if identity is True and key:
+                confirmed.append(candidate)
+            elif identity is None or not key:
+                uncertain = True
+        if uncertain or len(confirmed) > 1:
+            raise ZoteroClientError("目标文件夹有同题名文献，但年份/作者信息不足或存在多个可能相同的条目，请先检查 Zotero；未新增或合并文献。")
+        return confirmed[0] if confirmed else None
+
+    async def _save_paper(
+        self,
+        item: dict[str, Any],
+        collection_key: str | None,
+        target: str,
+        pdf_path: str | None,
+    ) -> dict[str, Any]:
+        existing = await self._find_existing_paper(item, collection_key)
+        if existing:
+            return {
+                "item_key": str(existing.get("key") or existing["data"]["key"]),
+                "attachment_key": "",
+                "collection_key": collection_key,
+                "collection_verified": True,
+                "pdf_imported": False,
+                "deduplicated": True,
+                "warnings": ["此论文已在目标文件夹中，已复用原条目；PDF 未导入。"]
+                if pdf_path
+                else [],
+            }
         previous_keys = {
             entry.get("key") or entry["data"].get("key")
             for entry in await self.search_items(item["title"], limit=20)
@@ -374,26 +485,41 @@ class ZoteroLocalClient:
         item["id"] = session_id
         try:
             await self._connector_post(
-                "/saveItems", {"sessionID": session_id, "items": [item]}, 201,
+                "/saveItems",
+                {"sessionID": session_id, "items": [item]},
+                201,
             )
             # saveItems uses the Zotero UI selection, not item.collections.
             # updateSession changes only items created in this exact session.
             await self._connector_post(
-                "/updateSession", {"sessionID": session_id, "target": target, "tags": []},
+                "/updateSession",
+                {"sessionID": session_id, "target": target, "tags": []},
             )
             new_items = [
-                entry for entry in await self.search_items(item["title"], limit=20)
+                entry
+                for entry in await self.search_items(item["title"], limit=20)
                 if (entry.get("key") or entry["data"].get("key")) not in previous_keys
                 and entry["data"].get("title", "").strip() == item["title"]
-                and (not doi or str(entry["data"].get("DOI") or "").casefold() == item["DOI"].casefold())
+                and (
+                    not item.get("DOI")
+                    or _doi_key(entry["data"].get("DOI")) == _doi_key(item["DOI"])
+                )
             ]
             expected_collections = [collection_key] if collection_key else []
-            if len(new_items) != 1 or new_items[0]["data"].get("collections", []) != expected_collections:
+            if (
+                len(new_items) != 1
+                or new_items[0]["data"].get("collections", []) != expected_collections
+            ):
                 raise ZoteroClientError("新增条目或目标文件夹未通过回读确认")
             parent_key = str(new_items[0].get("key") or new_items[0]["data"].get("key") or "")
             if not parent_key:
                 raise ZoteroClientError("新增条目缺少标识")
-        except (ZoteroClientError, ZoteroUnavailableError, ZoteroAccessDeniedError, httpx.RequestError) as exc:
+        except (
+            ZoteroClientError,
+            ZoteroUnavailableError,
+            ZoteroAccessDeniedError,
+            httpx.RequestError,
+        ) as exc:
             raise ZoteroWriteUnverifiedError(
                 "Zotero 条目可能已经写入，但无法确认已保存到指定位置。"
                 "请先检查 Zotero，避免重复同步。" + str(exc)
@@ -405,5 +531,8 @@ class ZoteroLocalClient:
             "collection_key": collection_key,
             "collection_verified": True,
             "pdf_imported": False,
-            "warnings": ["已同步论文元数据；PDF 未导入，请在 Zotero 中手动添加附件。"] if pdf_path else [],
+            "deduplicated": False,
+            "warnings": ["已同步论文元数据；PDF 未导入，请在 Zotero 中手动添加附件。"]
+            if pdf_path
+            else [],
         }

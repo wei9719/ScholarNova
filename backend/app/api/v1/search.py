@@ -403,11 +403,15 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 papers,
                 query_plan.constraints,
             )
+            ranking_query = planner.ranking_query(query_plan)
+            relevant_candidates = await constraint_ranker.relevant_count(
+                first_pass_eligible, ranking_query,
+            )
 
             # 仅首轮低召回时做一次有界扩展，正常查询不增加调用。
             if _should_refine(
                 request,
-                len(first_pass_eligible),
+                relevant_candidates,
                 retrieve_result.successful_sources,
             ):
                 refinement_queries = planner.build_refinement_subqueries(
@@ -576,9 +580,10 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
             )
             ranked_papers = await ranker.rank(
                 papers=eligible_papers,
-                query=request.query,
+                query=ranking_query,
                 limit=result_limit,
                 constraints=query_plan.constraints,
+                minimum_relevance=0.45,
             )
             # 仅应用用户导入的真实分区数据；开放指标稍后按可见卡片异步补齐。
             from app.services.journal_quality import apply_local_ranking
@@ -654,6 +659,13 @@ async def _execute_search_task(run_id: str, request: SearchRequest) -> None:
                 "planning_reason": planner.planning_reason,
             }
             result_summary = _build_result_summary(ranked_papers, query_plan)
+            result_summary["relevance_note"] = (
+                "仅显示题名/摘要达到匹配下限的候选，结果可以少于请求数量或为空；"
+                "部分匹配可能是同领域基线，或模型/任务相符但领域尚未确认的跨域方法；"
+                "缺摘要且任务未表达的候选仅作待核方法，未被判定满足任务条件。"
+                "任务线索不等于已核验论文全文。OpenAlex 可从正文召回，"
+                "但本地相关度只核对实际题名/摘要。"
+            )
             search_run.mark_as_completed()
             search_run.update_progress({
                 **(search_run.progress or {}),

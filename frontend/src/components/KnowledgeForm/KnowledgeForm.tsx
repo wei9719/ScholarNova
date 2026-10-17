@@ -42,6 +42,7 @@ export default function KnowledgeForm({
   const [cardType, setCardType] = useState('')
   const [notebook, setNotebook] = useState<ReadingNote>(() => readingNote())
   const [autoPolish, setAutoPolish] = useState(false)
+  const [polishReview, setPolishReview] = useState<KnowledgeItem | null>(null)
   const session = useRef<string | null>(null)
   const initial = useRef('')
   const snapshot = () => JSON.stringify({ title, category, newCategory, content, sourcePaperTitle, sourcePaperDoi, researchPoints, tags, notes, cardType, notebook })
@@ -92,7 +93,7 @@ export default function KnowledgeForm({
   }
 
   useEffect(() => {
-    if (!open) { session.current = null; return }
+    if (!open) { session.current = null; setPolishReview(null); return }
     const key = editingItem?.id || prefill?.source_paper_id || prefill?.title || 'new'
     if (session.current === key) return
     session.current = key
@@ -107,6 +108,7 @@ export default function KnowledgeForm({
     setCardType(values.cardType)
     setNotebook(values.notebook)
     setAutoPolish(false)
+    setPolishReview(null)
     setTitle(values.title); setCategory(values.category); setContent(values.content)
     setSourcePaperTitle(values.sourcePaperTitle); setSourcePaperDoi(values.sourcePaperDoi)
     setResearchPoints(values.researchPoints); setTags(values.tags); setNotes(values.notes)
@@ -115,6 +117,7 @@ export default function KnowledgeForm({
   }, [editingItem, prefill, open])
   const handleClose = () => {
     if (saving) return
+    if (polishReview) { onSuccess(); onClose(); return }
     if (initial.current && snapshot() !== initial.current && !window.confirm(isChinese ? '笔记尚未保存，确定放弃本次修改？' : 'Discard unsaved changes?')) return
     onClose()
   }
@@ -162,6 +165,7 @@ export default function KnowledgeForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (saving || polishReview) return
     if (!title.trim()) {
       toast.error(isChinese ? '请输入标题' : 'Please enter a title')
       return
@@ -193,8 +197,31 @@ export default function KnowledgeForm({
       if (editingItem) {
         await knowledgeApi.update(editingItem.id, { ...data, expected_updated_at: editingItem.updated_at })
       } else {
-        await knowledgeApi.create(data)
+        const created = await knowledgeApi.create(data)
+        if (created.data?.polish_draft) {
+          setPolishReview(created.data)
+          toast.success(isChinese ? '原文已保存。AI 草稿尚未采用，请先核对。' : 'Original saved. Review the AI draft before applying it.')
+          return
+        }
       }
+      toast.success(t('knowledge.saveSuccess'))
+      onSuccess()
+      onClose()
+    } catch (error) {
+      toast.error(safeErrorMessage(error, t('knowledge.saveError')))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const adoptPolish = async () => {
+    if (saving || !polishReview?.polish_draft) return
+    setSaving(true)
+    try {
+      await knowledgeApi.update(polishReview.id, {
+        ...polishReview.polish_draft,
+        expected_updated_at: polishReview.updated_at,
+      })
       toast.success(t('knowledge.saveSuccess'))
       onSuccess()
       onClose()
@@ -222,7 +249,7 @@ export default function KnowledgeForm({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="knowledge-form-body custom-scrollbar">
-          <fieldset disabled={saving}>
+          <fieldset disabled={saving || Boolean(polishReview)}>
           <div className="form-metadata">
           <div className="knowledge-form-field">
             <label className="knowledge-form-label" htmlFor="knowledge-kind">{isChinese ? '资料类型' : 'Entry type'}</label>
@@ -362,7 +389,7 @@ export default function KnowledgeForm({
               className="knowledge-form-textarea"
             />
             {['foundation', 'skill'].includes(cardType) && <p className="knowledge-form-hint">{cardType === 'foundation' ? (isChinese ? '建议记录定义、前置条件、推导、例子、学习资料和自测结果。' : 'Include definitions, prerequisites, derivations, examples, resources and self-checks.') : (isChinese ? '建议记录适用场景、输入输出、依赖、步骤、命令、示例和验收标准。' : 'Include use cases, inputs, outputs, dependencies, steps, commands, examples and checks.')}</p>}
-            {!editingItem && <label className="knowledge-form-hint"><input type="checkbox" checked={autoPolish} onChange={e => setAutoPolish(e.target.checked)} /> {isChinese ? '使用 AI 压缩正文（可选，会替换为短摘要；长笔记请勿勾选）' : 'AI condensation (optional; replaces content with a short summary)'}</label>}
+            {!editingItem && <label className="knowledge-form-hint"><input type="checkbox" checked={autoPolish} onChange={e => setAutoPolish(e.target.checked)} /> {isChinese ? '生成 AI 润色草稿（可选；先保存原文，核对后再决定是否采用）' : 'Generate an AI editing draft (save the original first; apply only after review)'}</label>}
           </div>}
 
           {/* Research Points */}
@@ -442,20 +469,27 @@ export default function KnowledgeForm({
             />
           </div>
           </fieldset>
+          {polishReview?.polish_draft && <section aria-label={isChinese ? 'AI 润色待确认' : 'Review AI editing draft'} className="knowledge-form-field">
+            <h3>{isChinese ? '原文已保存，以下 AI 草稿尚未采用' : 'Original saved; the AI draft below has not been applied'}</h3>
+            <p className="knowledge-form-hint">{isChinese ? '重点核对研究任务、否定词、数字和公式。模型生成完成不代表意思没有改变；保留原文不会再次调用模型。' : 'Check the task, negations, numbers and formulas. A completed model response may change the meaning. Keeping the original makes no new model call.'}</p>
+            <textarea aria-label={isChinese ? 'AI 润色草稿' : 'AI editing draft'} disabled={saving} value={polishReview.polish_draft.content} onChange={event => setPolishReview({ ...polishReview, polish_draft: { ...polishReview.polish_draft!, content: event.target.value } })} rows={8} className="knowledge-form-textarea" />
+            <p>{isChinese ? '草稿研究点：' : 'Draft research points: '}{polishReview.polish_draft.research_points.join('；')}</p>
+            <p>{isChinese ? '草稿标签：' : 'Draft tags: '}{polishReview.polish_draft.tags.join('、')}</p>
+          </section>}
         </form>
 
         {/* Footer */}
         <div className="knowledge-form-footer">
           <button onClick={handleClose} disabled={saving} className="knowledge-form-cancel-btn">
-            {t('common.cancel')}
+            {polishReview ? (isChinese ? '保留原文并完成' : 'Keep original and finish') : t('common.cancel')}
           </button>
           <button
-            onClick={handleSubmit}
+            onClick={polishReview ? adoptPolish : handleSubmit}
             disabled={saving}
             className="knowledge-form-submit-btn"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-            {t('knowledge.save')}
+            {polishReview ? (isChinese ? '采用草稿并保存' : 'Apply draft and save') : t('knowledge.save')}
           </button>
         </div>
       </div>

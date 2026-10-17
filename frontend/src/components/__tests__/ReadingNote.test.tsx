@@ -52,6 +52,48 @@ it('saves ordinary long-form notes unchanged unless condensation is explicitly c
   expect(api.create.mock.calls[0][0]).toMatchObject({ content: '原始内容', auto_polish: false })
 })
 
+const polishDraft = { content: '本研究属于预测实验。', research_points: ['模型生成的研究点'], tags: ['预测'] }
+async function reviewPolish() {
+  api.create.mockResolvedValue({ data: { ...note, card_type: null, content: '不要把预测实验误当成插补实验。', polish_draft: polishDraft } })
+  render(<KnowledgeForm {...props} prefill={{ ...note, card_type: null, card_data: null, content: '不要把预测实验误当成插补实验。' }} />)
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('button', { name: '保存' }))
+  await screen.findByLabelText('AI 润色草稿')
+}
+
+it('keeps original content and requires an explicit second action before applying an AI draft', async () => {
+  await reviewPolish()
+  expect(api.create.mock.calls[0][0].content).toBe('不要把预测实验误当成插补实验。')
+  expect(screen.getByLabelText('正文')).toHaveValue('不要把预测实验误当成插补实验。')
+  expect(screen.getByLabelText('AI 润色草稿')).toHaveValue(polishDraft.content)
+  expect(api.update).not.toHaveBeenCalled()
+  expect(props.onClose).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('AI 润色草稿'), { target: { value: '这是插补实验，不是预测实验。' } })
+  fireEvent.click(screen.getByRole('button', { name: '采用草稿并保存' }))
+  await waitFor(() => expect(api.update).toHaveBeenCalledWith(note.id, { ...polishDraft, content: '这是插补实验，不是预测实验。', expected_updated_at: note.updated_at }))
+  expect(api.create).toHaveBeenCalledOnce()
+  await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce())
+})
+
+it('finishes with the original without persisting the generated draft', async () => {
+  await reviewPolish()
+  fireEvent.click(screen.getByRole('button', { name: '保留原文并完成' }))
+  expect(api.update).not.toHaveBeenCalled()
+  expect(props.onSuccess).toHaveBeenCalledOnce()
+  expect(props.onClose).toHaveBeenCalledOnce()
+})
+
+it('keeps the draft visible after a concurrent-edit conflict without overwriting the original', async () => {
+  await reviewPolish()
+  api.update.mockRejectedValue({ response: { status: 409, data: { detail: '笔记已在其他窗口更新' } } })
+  fireEvent.click(screen.getByRole('button', { name: '采用草稿并保存' }))
+  await waitFor(() => expect(api.update).toHaveBeenCalledOnce())
+  await waitFor(() => expect(screen.getByRole('button', { name: '保留原文并完成' })).toBeEnabled())
+  expect(screen.getByLabelText('AI 润色草稿')).toHaveValue(polishDraft.content)
+  expect(screen.getByLabelText('正文')).toHaveValue('不要把预测实验误当成插补实验。')
+  expect(props.onClose).not.toHaveBeenCalled()
+})
+
 it('retains prose written while temporarily switching out of the structured notebook', async () => {
   render(<KnowledgeForm {...props} />)
   fireEvent.change(screen.getByLabelText('我的想法'), { target: { value: '已有记录' } })

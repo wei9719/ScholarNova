@@ -13,7 +13,7 @@ export default function SearchInsights({ run }: SearchInsightsProps) {
   const summary = run.result_summary
   const metrics = run.runtime_metrics
 
-  if (!summary || !metrics || !summary.total) return null
+  if (!summary || !metrics) return null
 
   const latency = metrics.latency_ms
     ? metrics.latency_ms >= 1000
@@ -61,6 +61,10 @@ export default function SearchInsights({ run }: SearchInsightsProps) {
           tone="text-sky-600 dark:text-sky-400"
         />
       </div>
+
+      {summary.relevance_note && <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+        {zh ? summary.relevance_note : 'Only candidates meeting the title/abstract match threshold are shown; results may be fewer or empty. Partial matches can be baselines or cross-domain methods. Full-text experiments are not verified by this score.'}
+      </p>}
 
       {!!run.source_status?.length && (
         <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800">

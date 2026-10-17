@@ -177,7 +177,12 @@ class QueryPlanner:
         """
         source_names = [s.value for s in sources]
         sources_str = ", ".join(source_names)
-        return PromptTemplates.query_parse(query=query, sources=sources_str)
+        return PromptTemplates.query_parse(query=query, sources=sources_str) + (
+            "\nUse OR for synonyms within a concept and AND between different concepts. "
+            "'Not prediction-only' does not mean excluding every paper mentioning prediction. "
+            "Dates belong in constraints, not keyword strings. "
+            "Do not invent unsupported constraint keys."
+        )
 
     # ------------------------------------------------------------------
     # LLM 解析
@@ -239,7 +244,8 @@ class QueryPlanner:
             if (source_val in source_set and source_val not in covered_sources
                     and isinstance(source_query, str) and 0 < len(source_query.strip()) <= 2000):
                 sub_queries.append(SubQuery(
-                    query=source_query.strip(),
+                    query=(self._openalex_query(source_query, original=query)
+                           if source_val == "openalex" else source_query.strip()),
                     source=DataSource(source_val),
                     rationale=sq_data.get("rationale", ""),
                 ))
@@ -263,7 +269,10 @@ class QueryPlanner:
                 key=c_data.get("key", ""),
                 operator=c_data.get("operator", "eq"),
                 value=c_data.get("value"),
-                description=c_data.get("description"),
+                description=(
+                    "题名/摘要中的任务线索偏好，不是全文任务核验；缺少线索不等于违反条件"
+                    if c_data.get("key") == "task_type" else c_data.get("description")
+                ),
             ))
 
         # 提取 keywords（合并原始关键词和扩展关键词）
@@ -293,6 +302,10 @@ class QueryPlanner:
             intent=data.get("intent", "open_exploration"),
             keywords=unique_keywords,
             constraints=constraints,
+            entities=self._extract_entities_rule(query, self._extract_keywords_rule(query)),
+            expanded_queries=self._build_expanded_queries(
+                query, self._extract_keywords_rule(query), data.get("intent", "open_exploration"),
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -347,10 +360,17 @@ class QueryPlanner:
         sources: List[DataSource],
     ) -> List[SubQuery]:
         """为低召回结果生成至多一组二轮查询，不触发额外 LLM 调用。"""
-        if not plan.expanded_queries:
+        facets = self.search_facets(plan.original_query)
+        can_relax_method = facets["method"] and facets["task"] and facets["domain"]
+        if not plan.expanded_queries and not can_relax_method:
             return []
-
-        refinement = plan.expanded_queries[0]
+        # Relax only the method in the existing second round; preserve domain
+        # and task. Final ranking still checks the original requested method.
+        refinement = (
+            " ".join([*facets["domain"], facets["task"]])
+            if can_relax_method
+            else plan.expanded_queries[0]
+        )
         initial = {(sq.source, sq.query.strip().lower()) for sq in plan.sub_queries}
         sub_queries: List[SubQuery] = []
         for source in sources:
@@ -565,6 +585,7 @@ class QueryPlanner:
             "中的", "中的使用", "方面", "查找", "寻找", "请", "帮我",
         }
 
+        query = cls.positive_query(query)
         keywords = []
         seen = set()
 
@@ -640,6 +661,8 @@ class QueryPlanner:
         "自然语言处理": "natural language processing", "计算机视觉": "computer vision",
         "知识图谱": "knowledge graph", "迁移学习": "transfer learning",
         "大语言模型": "large language model", "神经网络": "neural network",
+        "预训练大语言模型": "pretrained large language model",
+        "预训练语言模型": "pretrained language model",
         "数据挖掘": "data mining", "图像识别": "image recognition",
         "推荐系统": "recommendation system", "对话系统": "dialogue system",
         "语音识别": "speech recognition", "机器翻译": "machine translation",
@@ -665,6 +688,9 @@ class QueryPlanner:
         "交通流预测": "traffic flow prediction", "交通预测": "traffic prediction",
         "时序预测": "time series forecasting", "轨迹预测": "trajectory prediction",
         "交通流": "traffic flow", "时间序列": "time series", "时序": "time series",
+        "道路交通": "road traffic",
+        "缺失数据修复": "data imputation", "缺失修复": "data imputation",
+        "缺失数据": "missing data", "缺失值插补": "data imputation",
         "数据修复": "data imputation", "图像修复": "image restoration",
         "缺失值": "missing values", "数据补全": "data completion",
         "图像": "image", "传感器": "sensor", "预测": "prediction",
@@ -686,6 +712,170 @@ class QueryPlanner:
         terms = "|".join(re.escape(term) for term in sorted(cls._ZH_EN_MAP, key=len, reverse=True))
         result = re.sub(terms, lambda match: f" {cls._ZH_EN_MAP[match.group()]} ", query)
         return " ".join(result.split())
+
+    _TASK_SYNONYMS = {
+        "imputation": (
+            "imputation",
+            "imputing",
+            "data completion",
+            "data reconstruction",
+            "data recovery",
+        ),
+        "prediction": ("prediction", "forecasting"),
+        "classification": ("classification", "classifying"),
+        "detection": ("detection", "detecting"),
+    }
+    _LANGUAGE_MODELS = (
+        "large language model",
+        "large language models",
+        "pretrained language model",
+        "pretrained language models",
+        "pre-trained language model",
+        "pre-trained language models",
+        "LLM",
+        "LLMs",
+        "PLM",
+        "PLMs",
+    )
+
+    @staticmethod
+    def positive_query(query: str) -> str:
+        """Remove question scaffolding, not unknown subject names or datasets."""
+        text = re.sub(
+            r"(?:而不是|而非|不是)\s*(?:只|仅)\s*(?:做|进行)?\s*(?:预测|分类|检测)"
+            r"|\b(?:not|rather than)\s+(?:just|only)\s+"
+            r"(?:prediction|forecasting|classification|detection)\b",
+            " ",
+            query,
+            flags=re.I,
+        )
+        text = re.sub(
+            r"\b(?:19|20)\d{2}\s*(?:年?\s*[-–—~至到]\s*(?:(?:19|20)\d{2}\s*年?|今)|年以来|年至今)",
+            " ",
+            text,
+        )
+        text = re.sub(r'\bNOT\s+(?:"[^"\n]{1,100}"|[A-Za-z][A-Za-z0-9_-]*)', " ", text)
+        text = re.sub(r"(?:近|最近|过去)\s*[一二三四五六七八九十\d]+\s*年", " ", text)
+        text = re.sub(
+            r"(?:请帮我|帮我|我想查找|我想了解|查找|寻找|相关的?论文|的研究|下的|中的使用|中的|基于|用于|使用)",
+            " ",
+            text,
+        )
+        text = re.sub(
+            r"\b(?:find|please|papers?|studies|research|using|used|recent|latest)\b",
+            " ",
+            text,
+            flags=re.I,
+        )
+        return " ".join(text.split())
+
+    @staticmethod
+    def excluded_terms(query: str) -> list[str]:
+        """Honor simple, explicit user NOT operands; 'not prediction-only' is not one."""
+        return [
+            quoted or word
+            for quoted, word in re.findall(
+                r'\bNOT\s+(?:"([^"\n]{1,100})"|([A-Za-z][A-Za-z0-9_-]*))',
+                query,
+            )
+        ]
+
+    @classmethod
+    def task_evidence(cls, text: str, task: str) -> bool:
+        normalized = cls._translate_to_english(text).casefold()
+        if task == "imputation":
+            return bool(
+                re.search(
+                    r"\b(?:imput(?:ation|ing|e)|data (?:completion|reconstruction|recovery))\b",
+                    normalized,
+                )
+                or (
+                    re.search(r"\bmissing\b", normalized)
+                    and re.search(
+                        r"\b(?:repair|reconstruct|recover|fill|complet)\w*\b",
+                        normalized,
+                    )
+                )
+            )
+        return any(
+            re.search(r"\b" + re.escape(term) + r"\b", normalized)
+            for term in cls._TASK_SYNONYMS.get(task, ())
+        )
+
+    @classmethod
+    def search_facets(cls, query: str) -> dict:
+        """Small lexical facets; a match is metadata evidence, not a full-paper verdict."""
+        text = cls._translate_to_english(cls.positive_query(query)).casefold()
+        task = next((name for name in cls._TASK_SYNONYMS if cls.task_evidence(text, name)), "")
+        method = bool(
+            re.search(
+                r"\b(?:large language models?|pre-?trained language models?|llms?|plms?)\b", text
+            )
+        )
+        domain = re.sub(
+            r"\b(?:large language models?|pre-?trained language models?|llms?|plms?)\b", " ", text
+        )
+        for terms in cls._TASK_SYNONYMS.values():
+            for term in terms:
+                domain = re.sub(r"\b" + re.escape(term) + r"\b", " ", domain)
+        if task == "imputation":
+            domain = re.sub(r"\b(?:recovery|reconstruction|completion)\b", " ", domain)
+        domain = re.sub(
+            r"\b(?:data|model|models|method|methods|missing|values?|repair|pretrained|pre|trained)\b",
+            " ",
+            domain,
+        )
+        domain = re.sub(r"\b(?:not|and|or)\b", " ", domain)
+        return {"domain": cls._extract_keywords_rule(domain), "task": task, "method": method}
+
+    @classmethod
+    def _openalex_query(cls, query: str, *, original: str | None = None) -> str:
+        # Explicit user Boolean syntax remains the user's intent. A model may
+        # not turn 'not prediction-only' into NOT prediction for an entire PDF.
+        if re.search(r"\b(?:AND|OR|NOT)\b", original if original is not None else query):
+            return (original if original is not None else query).strip()
+        original_facets = cls.search_facets(original) if original is not None else None
+        if original_facets and original_facets["task"] == "imputation":
+            query = re.sub(
+                r"\bNOT\s+\(?\s*(?:prediction|forecasting)\s*\)?", " ", query, flags=re.I
+            )
+        if original_facets and (original_facets["task"] or original_facets["method"]):
+            facets = original_facets
+        elif original and re.search(r"\b(?:AND|OR|NOT)\b", query):
+            return query.strip()  # preserve AI groups rather than AND-ing their synonyms
+        else:
+            facets = cls.search_facets(query)
+        if not facets["task"] and not facets["method"]:
+            return " ".join(
+                cls._ZH_EN_MAP.get(kw, kw) for kw in cls._extract_keywords_rule(query)[:10]
+            )
+        parts = [
+            "(traffic OR transportation OR road)"
+            if term == "traffic"
+            else "(flow OR speed OR volume)"
+            if term == "flow" and "traffic" in facets["domain"]
+            else term
+            for term in facets["domain"][:8]
+            if not (term == "road" and "traffic" in facets["domain"])
+        ]
+        if facets["task"]:
+            parts.append(
+                "("
+                + " OR ".join('"' + term + '"' for term in cls._TASK_SYNONYMS[facets["task"]])
+                + ")"
+            )
+        if facets["method"]:
+            parts.append("(" + " OR ".join('"' + term + '"' for term in cls._LANGUAGE_MODELS) + ")")
+        return " AND ".join(parts)
+
+    @classmethod
+    def ranking_query(cls, plan: QueryParseResult) -> str:
+        return (
+            plan.original_query
+            if plan.intent == "exact_lookup"
+            or re.search(r"\b(?:AND|OR|NOT)\b", plan.original_query)
+            else cls._translate_to_english(cls.positive_query(plan.original_query))
+        )
 
     @classmethod
     def resolve_paper_alias(cls, query: str) -> str:
@@ -769,9 +959,7 @@ class QueryPlanner:
             compact = " ".join(keywords[:8]) if keywords else query
             return re.sub(r"[-–—]+", " ", compact)
         elif source == DataSource.OPENALEX:
-            # OpenAlex: 用英文关键词
-            en_keywords = [cls._ZH_EN_MAP.get(kw, kw) for kw in keywords]
-            return " ".join(en_keywords[:10]) if en_keywords else cls._translate_to_english(query)
+            return cls._openalex_query(query)
         elif source == DataSource.CROSSREF:
             # CrossRef 对紧凑的高信息密度 bibliographic query 更稳定。
             translated = cls._translate_to_english(query)

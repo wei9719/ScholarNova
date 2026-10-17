@@ -302,6 +302,7 @@ export interface SearchRunDetail {
     top_venues?: Array<{ name: string; count: number }>
     intent?: string | null
     entity_dimensions?: Record<string, string[]>
+    relevance_note?: string
   }
   created_at: string
   completed_at: string | null
@@ -525,6 +526,7 @@ export interface KnowledgeItem {
   created_at: string
   updated_at: string
   polish_status?: 'skipped' | 'completed' | 'invalid_response' | 'model_unavailable' | null
+  polish_draft?: { content: string; research_points: string[]; tags: string[] } | null
   model_completed?: boolean | null
   provider?: string | null
   model?: string | null

@@ -122,13 +122,13 @@ async def test_preparation_failure_rolls_back_and_never_calls_remote_tools(trans
     client, sessions, _, clean_after_endpoint_error = transaction_env
     original = agent._paper_candidates
 
-    async def fail_preparation(db):
+    async def fail_preparation(db, *args, **kwargs):
         if failure_at == "flush":
             db.add(KnowledgeBase(id="source", title="Duplicate", category="Research", content="Duplicate"))
             await db.flush()
         else:
             monkeypatch.setattr(db, "commit", AsyncMock(side_effect=RuntimeError("commit failed")))
-        return await original(db)
+        return await original(db, *args, **kwargs)
 
     remote_model = AsyncMock(side_effect=AssertionError("Preparation failure must not call a model"))
     remote_zotero = AsyncMock(side_effect=AssertionError("Preparation failure must not call Zotero"))

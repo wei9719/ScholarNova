@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # SenseNova
     SENSENOVA_API_KEY: str = ""
     SENSENOVA_API_BASE: str = "https://token.sensenova.cn/v1"
-    SENSENOVA_DEFAULT_MODEL: str = "sensenova-u1-fast"
+    SENSENOVA_DEFAULT_MODEL: str = "sensenova-u1.5-lite"
 
     # 默认 LLM 提供商
     DEFAULT_LLM_PROVIDER: str = "openai"
@@ -198,7 +198,7 @@ MODEL_PROFILES = {
     "assistant": {"provider": None, "model": None, "api_key": None, "base_url": None},
     "diagram": {
         "provider": "sensenova",
-        "model": "sensenova-u1-fast",
+        "model": "sensenova-u1.5-lite",
         "api_key": "ENV",
         "base_url": "https://token.sensenova.cn/v1",
     },

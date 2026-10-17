@@ -119,6 +119,22 @@ def test_help_topic_breaks_older_research_context():
     assert agent._contextual_retrieval_query(QUESTION, history) == QUESTION
 
 
+@pytest.mark.parametrize("question", [
+    "那是速度还是流量数据？",
+    "你刚才说的数据类型区别，为什么会影响我选择评价指标？分清材料依据与建议。",
+    "它的缺失模式是什么？",
+])
+def test_short_pronominal_questions_reuse_user_paper_topic_not_assistant_claims(question):
+    anchor = "GATGPT的交通实验数据是什么？"
+    history = [agent.AgentMessage(role="user", content=anchor),
+               agent.AgentMessage(role="assistant", content="DO_NOT_USE_OLD_ASSERTION 99%")]
+    query = agent._contextual_retrieval_query(question, history)
+    assert query == f"{anchor}\n{question}"
+    assert "DO_NOT_USE" not in query
+    switched = "换个话题，那是速度还是流量数据？"
+    assert agent._contextual_retrieval_query(switched, history) == switched
+
+
 @pytest.mark.asyncio
 async def test_research_followup_respects_disabled_sources(client, db_session, offline_retrieval):
     model, ranking, zotero = offline_retrieval

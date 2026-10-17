@@ -16,6 +16,8 @@ A desktop research workspace for individuals: **find papers → read full text �
 
 ### Start with 1.2.13
 
+**1.2.14 source validation:** resolve named papers and requested PDF pages/tables before retrieval; distribute general candidates across papers instead of retaining only recent imports. Show citation-marker checks separately from PDF/note provenance. Translate passages directly, locate abstract/conclusion writing samples, select notebook evidence by section, and deduplicate Zotero imports within the selected collection. See [live validation and remaining failures (中文)](docs/reports/v1.2.14-functional-validation.zh-CN.md). Available installers are determined by actual Release assets.
+
 | Goal | Entry and actual scope |
 | --- | --- |
 | Discover journals | In search results, choose **Find related journals**. Check journal type, Source ID and ISSN, candidate sample counts, homepage and related papers; the initial paper search does not wait for this query |

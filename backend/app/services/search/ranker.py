@@ -95,6 +95,7 @@ class Ranker:
         limit: int = 50,
         constraints: Optional[list] = None,
         source_ranks: Optional[Dict[str, Dict[str, int]]] = None,
+        minimum_relevance: float = 0.0,
     ) -> List[Paper]:
         """
         对论文列表进行多阶段排序
@@ -116,6 +117,8 @@ class Ranker:
         scored_papers = []
         for paper in papers:
             relevance = await self._calculate_relevance(paper, query)
+            if relevance < minimum_relevance:
+                continue
             constraint_score = self._calculate_constraint_score(paper, constraints)
             impact_score = self._calculate_impact_score(paper, papers)
             timeliness_score = self._calculate_timeliness_score(paper)
@@ -173,6 +176,14 @@ class Ranker:
 
         self._attach_quality_signals(result, papers)
         return result
+
+    async def relevant_count(
+        self, papers: list[Paper], query: str, *, minimum_relevance: float = 0.45
+    ) -> int:
+        """Count useful candidates, not API rows, before the existing bounded refinement."""
+        return sum(
+            [await self._calculate_relevance(paper, query) >= minimum_relevance for paper in papers]
+        )
 
     @staticmethod
     def _attach_quality_signals(
@@ -244,7 +255,15 @@ class Ranker:
 
         # 1. 查询转英文后的关键词匹配
         from app.services.search.query_planner import QueryPlanner
+
+        if any(
+            re.search(r"(?<!\w)" + re.escape(term.casefold()) + r"(?!\w)", f"{title}\n{abstract}")
+            for term in QueryPlanner.excluded_terms(query)
+        ):
+            return 0.0
         scoring_query = QueryPlanner.resolve_paper_alias(query)
+        if self.intent != "exact_lookup":
+            scoring_query = QueryPlanner.positive_query(scoring_query)
         en_query = QueryPlanner._translate_to_english(scoring_query).lower()
 
         # Both sides use the same phrase translation and word boundaries.
@@ -257,6 +276,50 @@ class Ranker:
             return 0.0
         title_tokens = set(self._tokenize(title))
         abstract_tokens = set(self._tokenize(abstract))
+
+        facets = QueryPlanner.search_facets(scoring_query)
+        if facets["method"] and self.intent != "exact_lookup":
+            # Domain/task/model evidence is checked before quality signals. An
+            # acronym/phrase is one concept, not 'large' + 'language' anywhere.
+            evidence = f"{title}\n{abstract}"
+            method_hit = bool(
+                re.search(
+                    r"\b(?:large language models?|pre-?trained language models?|llms?|plms?|"
+                    r"[a-z0-9]*gpt[a-z0-9]*|qwen[a-z0-9.-]*|deepseek[a-z0-9.-]*)\b",
+                    evidence,
+                )
+            )
+            domain = set(self._tokenize(" ".join(facets["domain"]))) - GENERIC_TERMS
+            domain_hit = (
+                not domain or len(domain & (title_tokens | abstract_tokens)) / len(domain) >= 0.5
+            )
+            if "traffic" in domain:
+                # Domain vocabulary, not a whitelist of known papers. Speed,
+                # volume and cross-domain transportation studies need not say flow.
+                domain_hit = bool(
+                    re.search(r"\b(?:traffic|transportation|road|pems\d*|metr(?:-la)?)\b", evidence)
+                )
+            task_hit = not facets["task"] or QueryPlanner.task_evidence(evidence, facets["task"])
+            if not domain_hit:
+                # An explicit model+task match may be a transferable method,
+                # but absent domain words never become proof of that domain.
+                return 0.45 if facets["task"] and method_hit and task_hit else 0.0
+            if method_hit and task_hit:
+                return (
+                    0.9
+                    if (
+                        domain <= title_tokens and QueryPlanner.task_evidence(title, facets["task"])
+                    )
+                    else 0.8
+                )
+            if task_hit:
+                return 0.55 if domain else 0.25  # useful domain/task baseline, not an LLM answer
+            other_task = any(
+                QueryPlanner.task_evidence(evidence, task)
+                for task in QueryPlanner._TASK_SYNONYMS
+                if task != facets["task"]
+            )
+            return (0.35 if other_task else 0.45) if method_hit else 0.15
 
         def coverage(terms: set[str]) -> float:
             return sum(
@@ -431,6 +494,13 @@ class Ranker:
     ) -> bool:
         """检查单个约束是否满足"""
         try:
+            if key == "task_type":
+                from app.services.search.query_planner import QueryPlanner
+                # This is only title/abstract evidence, never a claim to have
+                # verified the actual experiments in a full paper.
+                return operator == "eq" and QueryPlanner.task_evidence(
+                    f"{paper.title or ''}\n{paper.abstract or ''}", str(value).casefold(),
+                )
             if key == "publication_date":
                 boundary = date.fromisoformat(str(value))
                 observed = paper.publication_date
@@ -613,7 +683,7 @@ class Ranker:
         # an unrelated but highly cited paper can consume a limited result slot.
         def relevance_tier(item: dict) -> int:
             score = item["breakdown"]["relevance"]
-            return 2 if score >= 0.7 else 1 if score >= 0.45 else 0
+            return 4 if score >= 0.7 else 3 if score >= 0.45 else 2 if score >= 0.2 else 1 if score > 0 else 0
 
         scored_papers.sort(key=lambda x: (relevance_tier(x), x["base_score"]), reverse=True)
 

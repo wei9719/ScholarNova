@@ -61,7 +61,7 @@ class KnowledgeCreate(BaseModel):
     research_points: List[str] = Field(default=[], description="研究点列表")
     tags: List[str] = Field(default=[], description="标签列表")
     notes: Optional[str] = Field(None, description="用户备注")
-    auto_polish: bool = Field(default=False, description="是否自动润色内容")
+    auto_polish: bool = Field(default=False, description="是否生成待确认润色草稿；始终保存原文，不自动覆盖")
     card_type: Optional[str] = Field(None, max_length=50, description="卡片类型，兼容旧类型；新增 reading_note/foundation/skill")
     card_data: Optional[dict] = Field(None, description="结构化卡片数据")
 
@@ -88,6 +88,16 @@ class KnowledgeUpdate(BaseModel):
     expected_updated_at: Optional[datetime] = Field(None, description="编辑时读取的更新时间；不一致返回 409")
 
 
+class KnowledgePolishDraft(BaseModel):
+    """Unconfirmed model suggestion returned once; never persisted or indexed."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    content: str = Field(min_length=1, description="未确认的 AI 润色草稿，不代表事实已核验")
+    research_points: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
 class KnowledgeResponse(BaseModel):
     """知识条目响应"""
     id: str
@@ -104,7 +114,8 @@ class KnowledgeResponse(BaseModel):
     card_data: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
-    polish_status: Optional[Literal["skipped", "completed", "invalid_response", "model_unavailable"]] = Field(None, description="仅本次创建请求的润色状态，非持久化字段")
+    polish_status: Optional[Literal["skipped", "completed", "invalid_response", "model_unavailable"]] = Field(None, description="仅本次创建请求的润色状态；completed表示生成待确认草稿，不表示已覆盖原文，非持久化字段")
+    polish_draft: KnowledgePolishDraft | None = Field(None, description="仅本次创建返回的未确认草稿；未保存、未索引，原文仍在数据库中，须用户明确确认后通过更新接口采用")
     model_completed: Optional[bool] = Field(None, description="本次润色模型是否返回结果；未调用时为空")
     provider: Optional[str] = None
     model: Optional[str] = None

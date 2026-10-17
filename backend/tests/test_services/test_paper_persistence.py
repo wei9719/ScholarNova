@@ -57,7 +57,8 @@ async def test_search_commits_local_ids_before_cache_and_never_completes_failed_
         await db.commit()
     papers = [
         Paper(id="source-id", title="Traffic flow missing values imputation", doi="10.1/existing", source="crossref"),
-        Paper(id="new-id", title="Urban vehicle congestion measurements repair", doi="10.2/new", source="crossref"),
+        # Both fixtures must pass search relevance before exercising persistence.
+        Paper(id="new-id", title="Urban traffic flow data repair using vehicle congestion measurements", doi="10.2/new", source="crossref"),
     ]
     monkeypatch.setattr(database, "async_session_factory", factory)
     monkeypatch.setattr(inference, "RoutedLLMGateway", lambda **kwargs: SimpleNamespace(usage={"total_tokens": 0}))

@@ -4,6 +4,18 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.14 source — evidence retrieval and real workflow validation
+
+- Resolve named papers and explicit page/table references inside the selected knowledge category before the candidate cap. Preserve older PDFs, normalize compact labels and use fair, query-aware candidates for general retrieval; missing requested pages/tables do not fall back to unrelated notes or Zotero.
+- Label PDF-original versus knowledge-note sources and actual pages in the assistant. Citation-marker checks are not factual verification; show zero-result tool counts and category-appropriate examples.
+- Translate selected text directly, preserving paragraph/person/number/formula boundaries; allow bounded current-page translation without a selection. Tighten figure legends and equation-index prompts, and disclose that visual/math teaching output is not independently fact- or symbol-verified.
+- Locate abstract and conclusion excerpts for bounded 2–5-paper writing comparisons instead of blindly truncating the first/second/last pages. Select notebook experiment, math and resource evidence from relevant body text and deduplicate repeated excerpts.
+- Deduplicate repeated/concurrent Zotero imports only inside the requested collection, with read-back verification. Metadata import is verified; PDF attachment transfer remains unsupported by this route.
+- Record actual GLM/Qwen and local-Zotero tests, including incomplete results, in the [functional validation report](docs/reports/v1.2.14-functional-validation.zh-CN.md). A successful model/HTTP response is not complete functional acceptance.
+- Compile positive search concepts with OR for synonyms and AND across facets, preserve user-written Boolean intent, and prevent accidental prediction exclusion. Rank useful metadata evidence before impact signals; low-match results trigger only the existing bounded refinement, and final results may be fewer or empty. Keep default sources unchanged and expose zero-result diagnostics.
+- Preserve original knowledge content, points and tags during optional AI editing. Return the unconfirmed draft separately, allow review/editing, and use the existing conflict-protected update only after an explicit apply action.
+- Add the tested SenseNova U1.5 Lite image preset/default while retaining U1 Fast compatibility and existing user settings. Export the existing deterministic SVG architecture separately from cloud-generated images; HTML-compatible `.doc` is not native DOCX or proof of Word rendering.
+
 ### 1.2.13 source — journal discovery and page-anchored guided reading
 
 - Add user-triggered journal discovery alongside search results. Verify journal type, OpenAlex Source ID and ISSN; distinguish confirmed journals from unverified candidate publication sources. Preserve current-result/discovery-sample denominators and persist same-journal papers before exposing actionable IDs.

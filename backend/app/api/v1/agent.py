@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_model_for_task
@@ -27,8 +27,21 @@ from app.services.inference import (
 from app.services.integrations.zotero import ZoteroLocalClient
 from app.services.llm.gateway import LLMGateway
 from app.services.retrieval.adapters import from_knowledge, from_paper, from_zotero
+from app.services.retrieval.bm25 import RankedChunk, rank_chunks
 from app.services.retrieval.contracts import RetrievalChunk
 from app.services.retrieval.hybrid import rank_chunks_hybrid
+from app.services.retrieval.paper_locator import (
+    expand_research_query,
+    has_ambiguous_named_prefixes,
+    PaperLocator,
+    has_paper_title_cue,
+    lookup_terms,
+    match_named_papers,
+    normalize_query,
+    parse_locator,
+    table_caption_matches,
+    table_matches,
+)
 
 router = APIRouter()
 
@@ -138,7 +151,7 @@ _PRODUCT_HELP_PATTERNS = (
     re.compile(r"(?:目前)?(?:智能体|平台|系统|软件|助手)(?:怎么|如何|怎样)(?:用|使用|操作)[呢呀啊吗么]*"),
     re.compile(r"(?:怎么|如何|怎样)(?:用|使用|操作)(?:这个|本)?(?:智能体|scholarnova|平台|系统|软件|助手)[呢呀啊吗么]*"),
     re.compile(r"(?:scholarnova|这个智能体|本平台)(?:的)?(?:使用方法|操作流程|使用说明|功能介绍|是什么|是啥)[呢呀啊吗么]*"),
-    re.compile(r"(?:我(?:该|应该|可以|能|要)?|我想知道)?(?:怎么|如何|怎样)(?:才能)?(?:用|使用|操作)(?:你|您|scholarnova)[呢呀啊吗么]*"),
+    re.compile(r"(?:我(?:该|应该|可以|能|要)?|我想知道)?(?:怎么|如何|怎样)(?:才能)?(?:开始)?(?:用|使用|操作)(?:你|您|scholarnova)[呢呀啊吗么]*"),
     re.compile(r"(?:我(?:该|应该|可以)?|我想知道)?(?:怎么|如何|怎样)(?:和|与|跟)(?:你|您)(?:协作|合作|交流|配合)[呢呀啊吗么]*"),
     re.compile(r"(?:你|您)(?:能|可以)?(?:教|告诉|指导)我(?:怎么|如何|怎样)(?:开始|入门|使用你)[呢呀啊吗么]*"),
     re.compile(r"(?:who|what) are you"),
@@ -208,6 +221,16 @@ def _is_product_help(question: str, history: Sequence[AgentMessage] = ()) -> boo
     # still a research question, not a request for this product's user guide.
     if any(pattern.fullmatch(normalized) for pattern in _PRODUCT_HELP_PATTERNS):
         return True
+    clauses = _help_clauses(question)
+    direct = [any(pattern.fullmatch(clause) for pattern in _PRODUCT_HELP_PATTERNS)
+              for clause in clauses]
+    # A compound onboarding question is still help, but a research clause
+    # appended to it must not bypass evidence retrieval.
+    if any(direct) and all(
+        matched or _is_help_followup(clause) or _HELP_PRESENTATION.fullmatch(clause)
+        for clause, matched in zip(clauses, direct)
+    ):
+        return True
     if not _is_help_followup(question):
         return False
     # Only resolve short follow-ups through recent user turns. An intervening
@@ -225,7 +248,9 @@ def _is_product_help(question: str, history: Sequence[AgentMessage] = ()) -> boo
 _RESEARCH_FOLLOWUP = re.compile(
     r"^(?:请)?(?:把|将)?(?:刚才|上轮|上一轮|前一轮|上述|上面|前面)(?:的)?"
     r"(?:限制|局限|结论|结果|方法|回答|证据|研究|分析|内容)|"
-    r"^(?:请)?(?:这些|那些|它们|这篇论文|这项研究)(?:的|有|是|能|如何|怎么|还|是否)"
+    r"^(?:请)?(?:这些|那些|它们|这篇论文|这项研究)(?:的|有|是|能|如何|怎么|还|是否)|"
+    r"^(?:请)?你(?:刚才|上轮|前面|上面)(?:说|提到|分析|解释|回答)|"
+    r"^(?:请问)?(?:那|那么|它|这个|这项|该方法|该数据)(?:的|是|有|能|用|为|还|属于|如何|怎么|是否)"
 )
 _TOPIC_SWITCH = re.compile(r"换个话题|换一个话题|另一个问题|现在讨论|改为研究|先不讨论|暂时不管")
 
@@ -233,7 +258,7 @@ _TOPIC_SWITCH = re.compile(r"换个话题|换一个话题|另一个问题|现在
 def _contextual_retrieval_query(question: str, history: Sequence[AgentMessage]) -> str:
     """Carry a user's topic into an elliptical follow-up, never past evidence."""
     def is_followup(text: str) -> bool:
-        return not _TOPIC_SWITCH.search(text) and bool(
+        return len(text) <= 160 and not _TOPIC_SWITCH.search(text) and bool(
             _RESEARCH_FOLLOWUP.search(_normalize_help_question(text)) or _is_help_followup(text)
         )
 
@@ -472,10 +497,13 @@ def _merge_usage(target: dict[str, int], addition: dict[str, int]) -> None:
 async def _knowledge_candidates(
     db: AsyncSession,
     category: str | None = None,
+    *, paper_ids: Sequence[str] | None = None,
 ) -> list[RetrievalChunk]:
     statement = select(KnowledgeBase)
     if category is not None:
         statement = statement.where(KnowledgeBase.category == category)
+    if paper_ids is not None:
+        statement = statement.where(KnowledgeBase.source_paper_id.in_(paper_ids))
     result = await db.execute(
         statement.order_by(KnowledgeBase.updated_at.desc()).limit(80)
     )
@@ -491,22 +519,124 @@ async def _knowledge_candidates(
     ]
 
 
+def _paper_scope(category: str | None):
+    if category is None:
+        return True
+    return select(KnowledgeBase.id).where(
+        KnowledgeBase.category == category,
+        KnowledgeBase.source_paper_id == PaperEntity.id,
+    ).correlate(PaperEntity).exists()
+
+
+async def _named_papers(db: AsyncSession, query: str, category: str | None, *, coverage: dict[str, Any] | None = None) -> list[str]:
+    terms = lookup_terms(query)
+    if not terms:
+        return []
+    compact_title = func.lower(PaperEntity.title)
+    for character in (" ", "-", "−", "–", "—", "‐", "‑", ":", "：", "_"):
+        compact_title = func.replace(compact_title, character, "")
+    predicates = [compact_title.contains(re.sub(r"[\W_]", "", term), autoescape=True)
+                  for term in terms if re.sub(r"[\W_]", "", term)]
+    if not predicates:
+        return []
+    title_relevance = sum((case((predicate, 1), else_=0) for predicate in predicates), start=0)
+    statement = select(PaperEntity.id, PaperEntity.title).where(
+        _paper_scope(category), or_(*predicates),
+    ).order_by(title_relevance.desc(), PaperEntity.id).limit(512)
+    titles = (await db.execute(statement)).all()
+    paper_ids = match_named_papers(query, titles)
+    if coverage is not None and len(paper_ids) > 1:
+        coverage["named_ambiguous"] = has_ambiguous_named_prefixes(
+            query, [(pid, title) for pid, title in titles if pid in paper_ids],
+        )
+    return paper_ids
+
+
 async def _paper_candidates(
-    db: AsyncSession, category: str | None = None,
+    db: AsyncSession, category: str | None = None, *, query: str = "",
+    paper_ids: Sequence[str] | None = None, locator: PaperLocator | None = None,
+    coverage: dict[str, Any] | None = None,
 ) -> list[RetrievalChunk]:
+    coverage = coverage if coverage is not None else {}
+    locator = locator or PaperLocator()
+    scope = _paper_scope(category)
+    total, documents = (await db.execute(select(
+        func.count(PaperChunk.id), func.count(func.distinct(PaperChunk.paper_id)),
+    ).join(PaperEntity, PaperEntity.id == PaperChunk.paper_id).where(scope))).one()
+    coverage.update(scope_chunks=total, scope_papers=documents)
+    filters = [scope]
+    if paper_ids is not None:
+        filters.append(PaperEntity.id.in_(paper_ids))
+    if locator.page is not None:
+        filters.append(PaperChunk.page == locator.page)
     statement = select(PaperEntity, PaperChunk).join(
         PaperChunk, PaperChunk.paper_id == PaperEntity.id,
-    )
-    if category is not None:
-        # EXISTS keeps one PDF chunk even if several notes link the same paper.
-        statement = statement.where(select(KnowledgeBase.id).where(
-            KnowledgeBase.category == category,
-            KnowledgeBase.source_paper_id == PaperEntity.id,
-        ).exists())
-    result = await db.execute(statement.order_by(
-        PaperChunk.created_at.desc(), PaperChunk.position,
+    ).where(*filters)
+    if locator.explicit:
+        if locator.table is not None and locator.page is None:
+            # Narrow on the database before loading text, then verify the exact
+            # table number in Python (Table2 must not also mean Table20).
+            filters.append(or_(
+                PaperChunk.content.ilike("%table%"), PaperChunk.content.ilike("%tab.%"),
+                PaperChunk.content.contains("表"), PaperChunk.kind == "table",
+            ))
+            statement = statement.where(filters[-1])
+        rows = (await db.execute(statement.order_by(
+            PaperEntity.id, PaperChunk.position,
+        ).limit(128))).all()
+        chunks = [from_paper(paper, chunk) for paper, chunk in rows]
+        if locator.table is not None:
+            hits = [chunk for chunk in chunks if table_matches(
+                f"{chunk.metadata.get('heading') or ''}\n{chunk.content}", locator.table,
+            )]
+            if not hits:
+                location = f"第 {locator.page} 页" if locator.page is not None else "已解析正文"
+                coverage["locator_missing"] = (
+                    f"指定论文的{location}中未找到 Table {locator.table} 的可核对文字。"
+                    "请核对 PDF 页码、表号或使用单篇伴读查看该页；不会用其他论文或笔记冒充该表原文。"
+                )
+                return []
+            # The table's heading, columns and target rows take priority over
+            # earlier same-page prose, regardless of language/token mismatch.
+            hit_ids = {chunk.chunk_id for chunk in hits}
+            hits.sort(key=lambda chunk: (
+                chunk.metadata.get("kind") != "table",
+                not table_caption_matches(chunk.content, locator.table), chunk.position,
+            ))
+            pages = {chunk.metadata.get("page") for chunk in hits} - {None}
+            chunks = hits + [chunk for chunk in chunks if chunk.chunk_id not in hit_ids
+                             and (locator.page is not None or chunk.metadata.get("page") in pages)]
+        if not chunks:
+            coverage["locator_missing"] = (
+                f"指定论文未找到第 {locator.page} 页的已解析文字，可能是页码不符或 OCR/文本提取不足。"
+                "请在单篇伴读中核对该页；不会改用其他页或其他论文代答。"
+            )
+        coverage.update(eligible_chunks=len(chunks), candidate_strategy="指定论文页/表定向")
+        return chunks
+
+    # Round-robin across documents prevents recently imported long PDFs from
+    # evicting every old paper. A bounded lexical SQL score also selects useful
+    # late-page chunks before the per-document round-robin cap is applied.
+    terms = lookup_terms(query)[:8]
+    relevance = sum((case((or_(
+        func.lower(PaperChunk.content).contains(term.casefold(), autoescape=True),
+        func.lower(PaperEntity.title).contains(term.casefold(), autoescape=True),
+    ), 1), else_=0) for term in terms), start=0)
+    if not terms:
+        relevance = case((PaperChunk.id.is_not(None), 0), else_=0)
+    pool = select(
+        PaperChunk.id.label("chunk_id"), relevance.label("relevance"),
+        func.row_number().over(
+            partition_by=PaperChunk.paper_id,
+            order_by=(relevance.desc(), PaperChunk.position, PaperChunk.id),
+        ).label("document_position"),
+    ).join(PaperEntity, PaperEntity.id == PaperChunk.paper_id).where(*filters).subquery()
+    result = await db.execute(statement.join(pool, pool.c.chunk_id == PaperChunk.id).order_by(
+        pool.c.document_position, pool.c.relevance.desc(), PaperEntity.id, PaperChunk.position,
     ).limit(600))
-    return [from_paper(paper, chunk) for paper, chunk in result.all()]
+    chunks = [from_paper(paper, chunk) for paper, chunk in result.all()]
+    coverage.update(eligible_chunks=len(chunks), candidate_strategy="跨论文公平候选+词项预选")
+    return chunks
 
 
 @router.post("/chat", response_model=AgentChatResponse)
@@ -536,17 +666,47 @@ async def chat_with_research_agent(
     knowledge_candidates: list[RetrievalChunk] = []
     paper_candidates: list[RetrievalChunk] = []
     zotero_candidates: list[RetrievalChunk] = []
+    named_paper_ids: list[str] = []
+    locator = parse_locator(request.question)
+    coverage: dict[str, Any] = {}
     zotero_status: Literal["completed", "skipped", "unavailable"] = "skipped"
     zotero_detail = "用户未启用 Zotero 检索"
 
     if request.use_knowledge:
         try:
-            if request.knowledge_category is None:
-                knowledge_candidates = await _knowledge_candidates(db)
-                paper_candidates = await _paper_candidates(db)
+            named_paper_ids = await _named_papers(db, request.question, request.knowledge_category, coverage=coverage)
+            if named_paper_ids:
+                # An explicitly named current paper overrides a previous topic.
+                retrieval_query = request.question
+                steps = [step for step in steps if step.tool != "contextual_query"]
+            elif retrieval_query != request.question:
+                named_paper_ids = await _named_papers(db, retrieval_query, request.knowledge_category, coverage=coverage)
+            comparison = re.search(r"比较|对比|对照|异同|两篇|两者|分别|\b(?:compar\w*|versus|vs)\b", request.question, re.I)
+            if len(named_paper_ids) > 4 or coverage.get("named_ambiguous") or (len(named_paper_ids) > 1 and (locator.explicit or not comparison)):
+                coverage["locator_missing"] = "当前范围匹配到多个同名或题名前缀记录，请提供完整题名或在单篇伴读中选择具体论文。"
+            elif (locator.explicit or has_paper_title_cue(request.question)) and not named_paper_ids:
+                coverage["locator_missing"] = (
+                    "尚未在当前资料范围定位到指定论文，无法核对所问原文或页表。"
+                    "请补充或检查完整题名与分类，并导入该篇 PDF；不会用其他论文填充证据。"
+                )
             else:
-                knowledge_candidates = await _knowledge_candidates(db, request.knowledge_category)
-                paper_candidates = await _paper_candidates(db, request.knowledge_category)
+                normalized_query = normalize_query(retrieval_query)
+                retrieval_query = expand_research_query(normalized_query)
+                if retrieval_query != normalized_query:
+                    steps.append(AgentToolStep(
+                        tool="query_expansion", status="completed", count=1,
+                        detail="将中文数据集、缺失设置、评价指标等线索对齐固定英文检索词，仅用于候选选择与相关性排序，不作为论文证据。",
+                    ))
+                knowledge_candidates = await _knowledge_candidates(
+                    db, request.knowledge_category,
+                    **({"paper_ids": named_paper_ids} if named_paper_ids else {}),
+                )
+                paper_candidates = await _paper_candidates(
+                    db, request.knowledge_category, query=retrieval_query,
+                    paper_ids=named_paper_ids or None, locator=locator, coverage=coverage,
+                )
+                if coverage.get("locator_missing"):
+                    knowledge_candidates = []
             # Candidates are plain records now. Persist lazy feature backfills
             # before any Zotero, embedding, or answer-model network wait.
             await db.commit()
@@ -556,6 +716,8 @@ async def chat_with_research_agent(
 
     if request.knowledge_category is not None:
         zotero_detail = "当前资料分类不包含Zotero；未执行 Zotero 检索"
+    elif named_paper_ids or locator.explicit or coverage.get("locator_missing"):
+        zotero_detail = "当前问题指定论文/页表，未用其他 Zotero 材料填充证据"
     elif request.use_zotero:
         try:
             zotero_client = ZoteroLocalClient()
@@ -575,14 +737,29 @@ async def chat_with_research_agent(
             zotero_status = "unavailable"
             zotero_detail = "Zotero 未启动或本地 API 尚未启用，已继续使用其他材料"
 
+    evidence_limit = 2 if get_model_for_task("assistant").get("provider") == "local" else 6
+    ranking_candidates = (
+        paper_candidates or knowledge_candidates if named_paper_ids
+        else [*knowledge_candidates, *paper_candidates, *zotero_candidates]
+    )
     retrieval = await rank_chunks_hybrid(
         db,
         retrieval_query,
-        [*knowledge_candidates, *paper_candidates, *zotero_candidates],
-        limit=2 if get_model_for_task("assistant").get("provider") == "local" else 6,
-        max_per_document=2,
+        ranking_candidates,
+        limit=evidence_limit,
+        max_per_document=(evidence_limit + len(named_paper_ids) - 1) // len(named_paper_ids) if named_paper_ids else 2,
     )
     ranked = retrieval.ranked
+    if named_paper_ids and paper_candidates:
+        if locator.explicit:
+            # A page/table locator is stronger than BM25 similarity. These are
+            # actual page contents, not page numbers appended to unrelated text.
+            ranked = [RankedChunk(chunk, 1.0) for chunk in paper_candidates[:evidence_limit]]
+        remaining = evidence_limit - len(ranked)
+        if remaining:
+            ranked = [*ranked, *rank_chunks(
+                retrieval_query, knowledge_candidates, limit=remaining, max_per_document=1,
+            )]
     selected_knowledge = sum(item.chunk.source == "knowledge" for item in ranked)
     selected_papers = sum(item.chunk.source == "paper" for item in ranked)
     selected_zotero = sum(item.chunk.source == "zotero" for item in ranked)
@@ -599,14 +776,21 @@ async def chat_with_research_agent(
         f"资料分类“{request.knowledge_category}”："
         if request.knowledge_category is not None else ""
     )
+    coverage_note = (
+        (f"资料范围共 {coverage['scope_papers']} 篇/{coverage['scope_chunks']} 个全文片段；"
+         if "scope_chunks" in coverage else "未扫描全文候选；")
+        + (f"命中指定论文 {len(named_paper_ids)} 篇；" if named_paper_ids else "")
+        + f"{coverage.get('candidate_strategy', '未生成全文候选')}。"
+    )
+    selection_name = f"页/表定位优先（{ranking_name}辅助）" if named_paper_ids and locator.explicit else ranking_name
     steps.append(
         AgentToolStep(
             tool="paper_fulltext_search",
-            status="completed" if request.use_knowledge else "skipped",
+            status=("unavailable" if coverage.get("locator_missing") else "completed") if request.use_knowledge else "skipped",
             count=selected_papers,
             detail=(
-                f"{scope_note}{ranking_name} 从 {len(paper_candidates)} 个已解析 PDF 片段中选择了 "
-                f"{selected_papers} 个相关片段"
+                f"{scope_note}{coverage_note}{selection_name} 从 {len(paper_candidates)} 个已解析 PDF 候选片段中选择了 "
+                f"{selected_papers} 个相关片段。{coverage.get('locator_missing', '')}"
                 if request.use_knowledge
                 else "用户未启用 ScholarNova 本地材料检索"
             ),
@@ -726,6 +910,8 @@ async def chat_with_research_agent(
                 if request.use_knowledge else
                 "你尚未启用知识库检索，当前资料分类也不包含 Zotero。请开启知识库检索后重试。"
             )
+        if coverage.get("locator_missing"):
+            empty_answer = coverage["locator_missing"]
         return AgentChatResponse(
             answer=empty_answer,
             citations=[],
@@ -778,6 +964,8 @@ async def chat_with_research_agent(
             "role": "user",
             "content": (
                 f"用户问题：{request.question}\n\n"
+                + ("本轮只定位到指定论文的材料，知识库笔记不是PDF原文；若原文缺少目标信息，必须明确说明，不用其他材料补造。\n\n" if named_paper_ids else "")
+                +
                 f"可引用材料：\n{source_text}\n\n"
                 + ("仅回答当前问题，最多三个简短事实句，每句标注来源编号。" if local_mode else "请先给出直接结论，再给出证据和仍需确认的问题。")
             ),

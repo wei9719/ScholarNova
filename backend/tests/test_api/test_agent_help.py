@@ -75,6 +75,32 @@ def test_standalone_chinese_greetings_still_enter_product_help(question):
 
 
 @pytest.mark.parametrize("question", [
+    "你是做什么的？如何开始使用ScholarNova？",
+    "你可以做什么？我已经导入论文了，下一步怎么做？",
+    "如何开始使用ScholarNova？不要重复软件介绍。",
+    "Who are you? What can you do?",
+])
+def test_compound_onboarding_clauses_route_to_help(question):
+    assert _is_product_help(question) is True
+
+
+@pytest.mark.parametrize("question", [
+    "你是做什么的？STD-PLM用了哪个数据集？",
+    "如何开始使用ScholarNova？比较两篇论文的实验。",
+    "What can you do? Explain the results in Table 2.",
+])
+def test_mixed_help_and_research_still_require_evidence(question):
+    assert _is_product_help(question, history_of("我该如何使用你")) is False
+
+
+def test_compound_progress_reply_keeps_compound_help_context():
+    assert _is_product_help(
+        "我已经导入论文了，下一步怎么做？不要重复软件介绍。",
+        history_of("你是做什么的？如何开始使用ScholarNova？"),
+    ) is True
+
+
+@pytest.mark.parametrize("question", [
     "准备论文", "导入论文", "导入PDF", "选择来源", "开启来源", "提出科研问题",
     "输入问题", "配置模型", "配置API", "我卡在选择来源这一步", "我已经导入论文了", "还没导入PDF",
 ])

@@ -18,7 +18,7 @@ const providers: { value: LLMProvider; label: string; models: string[]; baseUrl?
   { value: 'qwen', label: 'Alibaba Qwen', models: ['qwen-max', 'qwen-plus', 'qwen-turbo'], baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   { value: 'siliconflow', label: 'SiliconFlow (硅基流动)', models: ['Qwen/Qwen3-8B', 'Qwen/Qwen3-30B-A3B-Instruct-2507', 'Qwen/Qwen3.5-9B', 'Qwen/Qwen3-VL-8B-Instruct'], baseUrl: 'https://api.siliconflow.cn/v1' },
   { value: 'moonshot', label: 'Moonshot (Kimi)', models: ['moonshot-v1-128k', 'moonshot-v1-32k'], baseUrl: 'https://api.moonshot.cn/v1' },
-  { value: 'sensenova', label: 'SenseNova (商汤)', models: ['sensenova-u1-fast', 'sensenova-6.7-flash-lite', 'sensenova-6.5-pro'], baseUrl: 'https://token.sensenova.cn/v1' },
+  { value: 'sensenova', label: 'SenseNova (商汤)', models: ['sensenova-u1.5-lite', 'sensenova-u1-fast', 'sensenova-6.7-flash-lite', 'sensenova-6.5-pro'], baseUrl: 'https://token.sensenova.cn/v1' },
   { value: 'custom', label: 'Custom (OpenAI Compatible)', models: [] },
 ]
 

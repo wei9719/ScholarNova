@@ -74,6 +74,8 @@ class OpenAlexSource(BaseSource):
             论文列表
         """
         params = {
+            # Keep fulltext recall: cross-domain methods may describe a target
+            # domain only in experiments. Ranking uses actual title/abstract evidence.
             "search": query,
             "per_page": min(max_results, 200),
             **self._get_polite_params(),

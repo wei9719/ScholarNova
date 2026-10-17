@@ -465,9 +465,9 @@ export default function AnalysisViz({
   const arch = resolveArchitecture(analysis, architectureJson)
   const hasDiagram = arch !== null
 
-  // 文字分析部分（架构段落之前）
-  const archIndex = analysis.search(/研究架构图/)
-  const textPart = archIndex >= 0 ? analysis.slice(0, archIndex) : analysis
+  // The diagram is an additional view, not a delimiter for semantic prose.
+  // Hide complete control blocks only; unfinished markup must not swallow later facts.
+  const textPart = analysis.replace(/<ARCH_JSON\b[^>]*>[\s\S]*?<\/ARCH_JSON>/gi, '')
 
   return (
     <div className="space-y-4">

@@ -109,6 +109,21 @@ it('does not save fallback output as a completed AI research route', async () =>
   expect(mocks.success).not.toHaveBeenCalled()
 })
 
+it('keeps the category title when reanalyzing the same cached selection before category rows load', async () => {
+  localStorage.setItem('scholar-analysis-result', JSON.stringify({
+    result, knowledgeIds: ['note-1'], query: '只做两日计划', title: '食品保鲜',
+  }))
+  mount()
+  await screen.findByTestId('analysis')
+  fireEvent.click(screen.getByRole('button', { name: '重新分析' }))
+  fireEvent.click(screen.getByRole('button', { name: 'AI 分析研究方向' }))
+  await screen.findByTestId('analysis')
+  fireEvent.click(screen.getByRole('button', { name: '保存为研究路线' }))
+  await waitFor(() => expect(mocks.createRoute).toHaveBeenCalledWith(expect.objectContaining({
+    title: '食品保鲜', knowledge_ids: ['note-1'],
+  })))
+})
+
 it('retains analysis and reports uncertain save without claiming success', async () => {
   mocks.createRoute.mockRejectedValue(new Error('synthetic unavailable'))
   mount()

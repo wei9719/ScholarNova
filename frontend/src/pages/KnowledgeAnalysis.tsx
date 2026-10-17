@@ -64,6 +64,7 @@ export default function KnowledgeAnalysis() {
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeElapsed, setAnalyzeElapsed] = useState(0)
   const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(() => entry ? null : restoreAnalysis())
+  const reanalysisSource = useRef<AnalysisSnapshot | null>(null)
   const result = snapshot?.result || null
   const [query, setQuery] = useState(snapshot?.query || '')
   const [saving, setSaving] = useState(false)
@@ -191,11 +192,14 @@ export default function KnowledgeAnalysis() {
     const requirement = query.trim()
     const selectedCategories = Object.keys(categoryItems).filter((cat) =>
       categoryItems[cat].some((item) => knowledgeIds.includes(item.id)))
+    const previous = reanalysisSource.current
+    const previousTitle = previous && previous.knowledgeIds.length === knowledgeIds.length
+      && knowledgeIds.every((id) => previous.knowledgeIds.includes(id)) ? previous.title : ''
     try {
       const response = await knowledgeApi.aiAnalyze(knowledgeIds, requirement || undefined)
       if (!active.current) return
       setSnapshot({ result: response.data, knowledgeIds, query: requirement,
-        title: selectedCategories.join(' / ').slice(0, 100) || (isChinese ? '研究路线' : 'Research Route') })
+        title: (selectedCategories.join(' / ') || previousTitle || (isChinese ? '研究路线' : 'Research Route')).slice(0, 100) })
     } catch (err: any) {
       const detail = err?.response?.data?.detail
       const msg = (typeof detail === 'string' ? detail : Array.isArray(detail)
@@ -364,7 +368,7 @@ export default function KnowledgeAnalysis() {
             <div className="animate-fade-in">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">{t('knowledge.aiResultTitle')}</h2>
-                <button disabled={saving} onClick={() => { setSnapshot(null); setSelectedIds(snapshot?.knowledgeIds || []); setError(null) }}
+                <button disabled={saving} onClick={() => { reanalysisSource.current = snapshot; setSnapshot(null); setSelectedIds(snapshot?.knowledgeIds || []); setError(null) }}
                   className="text-sm text-primary-600 dark:text-primary-400 hover:underline">
                   {isChinese ? '重新分析' : 'Re-analyze'}
                 </button>

@@ -10,11 +10,11 @@
 
 **跟着真实场景学使用**：[完整研究案例使用手册（Word）](docs/guides/ScholarNova完整研究案例使用手册.docx)以 METR-LA 交通速度缺失修复为研究点，配合实际界面，逐步讲解检索、全文阅读、九章笔记、知识积累、分类问答、研究路线与导出，并提供提问示例、复现检查表和验收方法。该 Word 手册对应 **1.2.12**；新增期刊发现、授权浏览和原文伴读，请看[在线手册第 12 节](docs/USER_MANUAL.zh-CN.md#12-1213期刊发现授权全文和原文伴读)与[1.2.13 使用案例](docs/releases/v1.2.13-guided-reading.zh-CN.md)。
 
-**当前版本 [1.2.13 已正式发布](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.13)**，提供 Windows Setup/便携版，以及 Intel Mac、Apple Silicon Mac 的 DMG/ZIP。三个平台均通过原生构建与应用/后端启动检查，最新下载已指向本版。本轮增加主动查询的相关期刊、独立授权全文窗口，以及智能体中的按页伴读和 2–5 篇本地全文写作样例对照；继续使用同一个知识库保存阅读笔记、基础知识和技能卡。操作见[1.2.13 使用案例](docs/releases/v1.2.13-guided-reading.zh-CN.md)，真实 GLM/Qwen 任务、失败与发行记录见[本轮验收报告](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md)。学校订阅登录仍需用户授权与逐站点核验，不能以公开论文测试代替。
+**当前版本 [1.2.14 已正式发布](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.14)**，提供 Windows Setup/便携版，以及 Intel Mac、Apple Silicon Mac 的 DMG/ZIP。三个平台均通过原生构建与应用/后端启动检查。本轮重点修复指定论文页表定位、翻译与笔记取材、搜索匹配和 Zotero 重复导入，AI 润色改为原文先保存、草稿核对后采用。真实 GLM/Qwen、视觉及出图任务、安装后回放和未通过项见[本轮实测报告](docs/reports/v1.2.14-functional-validation.zh-CN.md)。数学教学、复杂解释和部分相关性仍需改善；学校订阅登录仍需用户授权与逐站点核验，不能以公开论文测试代替。
 
-### 1.2.13 从哪里开始
+### 1.2.14 从哪里开始
 
-**1.2.14 源码调试进展**：指定论文、PDF 页码与表号先定向定位，再检索原文；通用问答不再只取最新导入论文的片段。界面区分“引用标记检查”和“PDF 原文 / 知识笔记”，不把引用编号正确当成事实正确。翻译改为直接译文，写作对照优先抽取摘要与结论，九章笔记按栏目选择正文材料；Zotero 在目标集合内按 DOI / 题名去重。真实功能复测与未通过项见[1.2.14 实测记录](docs/reports/v1.2.14-functional-validation.zh-CN.md)。安装包仍以 Release 实际附件为准。
+**本版使用重点**：升级后新建会话，选择知识库资料分类，再询问指定论文、PDF 页码与表号；旧回答不会自动重新生成。界面区分“引用标记检查”和“PDF 原文 / 知识笔记”，不把引用编号正确当成事实正确。先核对一个简短事实，再逐步追问解释，操作见[手册第 13 节](docs/USER_MANUAL.zh-CN.md#13-1214核对原文与避免假通过)。
 
 | 你想做什么 | 操作入口与实际范围 |
 | --- | --- |
@@ -30,20 +30,20 @@
 
 ## 下载与安装
 
-到 **[v1.2.13 正式下载页](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.13)**，展开 Assets，按你的电脑选择。也可使用[最新版本入口](https://github.com/wei9719/ScholarNova/releases/latest)。本版八项资产已上传，包括两个 Windows 可执行文件、两种 Mac 架构各 DMG/ZIP、同版本对应源码 ZIP 和 `SHA256SUMS.txt`；[三平台发布工作流](https://github.com/wei9719/ScholarNova/actions/runs/38919441705)已成功。
+到 **[v1.2.14 正式下载页](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.14)**，展开 Assets，按你的电脑选择。也可使用[最新版本入口](https://github.com/wei9719/ScholarNova/releases/latest)。本版八项资产已上传，包括两个 Windows 可执行文件、两种 Mac 架构各 DMG/ZIP、同版本对应源码 ZIP 和 `SHA256SUMS.txt`；[三平台发布工作流](https://github.com/wei9719/ScholarNova/actions/runs/39022556341)已成功。
 
 **社区桌面版采用已选择的 AGPL 开源发行路线。** 每个版本须包含逐包许可声明和相应源码，并通过自动源码检查及 Windows / macOS 启动测试后才能发布。详见 [发行要求](docs/DESKTOP_LICENSE_REVIEW.md)；可下载版本以同版本 Release 的实际附件为准，旧安装包不会自动包含最新源码改动。
 
 | 你的电脑 | 选择文件 | 安装方法 |
 | --- | --- | --- |
-| Windows 10/11，64 位 | [Setup 安装版](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-Setup-1.2.13-x64.exe) | 运行安装向导，创建桌面与开始菜单快捷方式 |
-| Windows 免安装 | [Portable 便携版](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-Portable-1.2.13-x64.exe) | 放在固定目录后双击运行 |
-| macOS 13+，Apple Silicon（M 系列） | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-arm64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-arm64.zip) | 将应用拖入“应用程序”；ZIP 先解压 |
-| macOS 13+，Intel | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-x64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-x64.zip) | 将应用拖入“应用程序”；ZIP 先解压 |
+| Windows 10/11，64 位 | [Setup 安装版](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-Setup-1.2.14-x64.exe) | 运行安装向导，创建桌面与开始菜单快捷方式 |
+| Windows 免安装 | [Portable 便携版](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-Portable-1.2.14-x64.exe) | 放在固定目录后双击运行 |
+| macOS 13+，Apple Silicon（M 系列） | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-arm64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-arm64.zip) | 将应用拖入“应用程序”；ZIP 先解压 |
+| macOS 13+，Intel | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-x64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-x64.zip) | 将应用拖入“应用程序”；ZIP 先解压 |
 
 桌面版自带界面、本地后端和 SQLite，无需安装 Python、Node.js 或 Docker。首次启动可能因解压运行时稍慢。升级前退出应用，安装新版本；个人数据位于用户目录，不在安装目录内。
 
-Windows 日常使用优先选择 **Setup 安装版**。便携版首次启动需要解压，耗时受设备和磁盘影响；自动启动检查不等于所有设备的性能承诺。升级与真实模型验收见[本版报告](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md)；早期指导重试记录保留在[1.2.5 报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。
+Windows 日常使用优先选择 **Setup 安装版**。便携版首次启动需要解压，耗时受设备和磁盘影响；自动启动检查不等于所有设备的性能承诺。升级与真实模型验收见[本版报告](docs/reports/v1.2.14-functional-validation.zh-CN.md)；早期指导重试记录保留在[1.2.5 报告](docs/reports/v1.2.5-assistant-retry.zh-CN.md)。
 
 本版要求 macOS 13 或更新系统，依据 [Electron 44 官方平台要求](https://www.electronjs.org/blog/electron-44-0)。
 
@@ -61,7 +61,7 @@ Windows 日常使用优先选择 **Setup 安装版**。便携版首次启动需�
 
 **想少看无摘要结果，或寻找写作参考？** 搜索后点击结果列表的“有摘要”；该筛选只作用于当前返回结果，同词重新搜索也会复位。打开论文详情的“相似论文”，选择“研究内容相近”“摘要结构参考”或“同刊相似论文”。推荐查询 OpenAlex 和 Crossref，不调用生成模型；“展开原始摘要”用于对照写法，“在本页查看与分析”可继续阅读。匹配分不是概率，同刊频次不是全刊统计，摘要缺失也不等于论文没有摘要。
 
-**不知道智能体怎么用？** 普通知识库问答中先问“我该如何使用你”，再说明卡在哪一步。产品指导保留精简说明、最近对话及失败后的“再次调用 AI”，未返回用量表示未知，不等于免费；具体科研问题仍需要真实材料。要逐段读论文，从论文详情点击“原文伴读”，按页选择任务。[本版操作与验收](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md)
+**不知道智能体怎么用？** 普通知识库问答中先问“我该如何使用你”，再说明卡在哪一步。产品指导保留精简说明、最近对话及失败后的“再次调用 AI”，未返回用量表示未知，不等于免费；具体科研问题仍需要真实材料。要逐段读论文，从论文详情点击“原文伴读”，按页选择任务。[本版操作与验收](docs/reports/v1.2.14-functional-validation.zh-CN.md)
 
 ## 产品预览
 

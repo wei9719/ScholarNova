@@ -12,11 +12,11 @@ A desktop research workspace for individuals: **find papers → read full text �
 
 **Learn through a complete research case:** the [illustrated walkthrough (Word, 中文)](docs/guides/ScholarNova完整研究案例使用手册.docx) follows METR-LA traffic-speed imputation through search, full-text reading, nine-section notes, reusable knowledge, scoped Q&A, research planning and export. It includes real interface screenshots, sample prompts, reproduction checklists and acceptance steps. This Word guide targets **1.2.12**; journal discovery, authorized access and guided reading are covered by [the updated online manual](docs/USER_MANUAL.zh-CN.md#12-1213期刊发现授权全文和原文伴读) and [1.2.13 walkthrough](docs/releases/v1.2.13-guided-reading.zh-CN.md).
 
-**[1.2.13 is officially released](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.13)** with Windows Setup/Portable and Intel/Apple Silicon Mac DMG/ZIP assets. All three platforms passed native builds and application/backend startup checks; latest downloads point to this release. New features include user-triggered journal discovery, isolated authorized access, page-anchored reading assistance and bounded comparison of 2–5 local writing samples, reusing the existing knowledge library. See [the walkthrough](docs/releases/v1.2.13-guided-reading.zh-CN.md) and [live GLM/Qwen acceptance and release record](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md). Institutional subscriptions still require user authorization and site-specific checks; published-paper tests are not campus-login acceptance.
+**[1.2.14 is officially released](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.14)** with Windows Setup/Portable and Intel/Apple Silicon Mac DMG/ZIP assets. All three platforms passed native builds and application/backend startup checks. This release fixes named-paper page/table retrieval, passage and notebook evidence selection, search matching and duplicate Zotero imports. AI editing saves the original first and applies a draft only after explicit review. See [real GLM/Qwen, vision, image and installed-app results, including failures (中文)](docs/reports/v1.2.14-functional-validation.zh-CN.md). Mathematical teaching, complex explanations and some relevance judgments still need work. Institutional subscriptions require user authorization and site-specific checks; published-paper tests are not campus-login acceptance.
 
-### Start with 1.2.13
+### Start with 1.2.14
 
-**1.2.14 source validation:** resolve named papers and requested PDF pages/tables before retrieval; distribute general candidates across papers instead of retaining only recent imports. Show citation-marker checks separately from PDF/note provenance. Translate passages directly, locate abstract/conclusion writing samples, select notebook evidence by section, and deduplicate Zotero imports within the selected collection. See [live validation and remaining failures (中文)](docs/reports/v1.2.14-functional-validation.zh-CN.md). Available installers are determined by actual Release assets.
+**Start a new conversation after upgrading**, select its evidence category, then ask about a named paper and PDF page/table. Old answers are preserved rather than regenerated. Citation-marker checks are separate from PDF/note provenance and are not factual verification. Check one concise fact first, then ask for an explanation; see [manual section 13 (中文)](docs/USER_MANUAL.zh-CN.md#13-1214核对原文与避免假通过).
 
 | Goal | Entry and actual scope |
 | --- | --- |
@@ -32,20 +32,20 @@ Historical records: [reading notes 1.2.12](docs/reports/v1.2.12-research-noteboo
 
 ## Download and install
 
-Open the **[v1.2.13 download page](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.13)** or [latest release](https://github.com/wei9719/ScholarNova/releases/latest), expand Assets and choose your platform. All eight assets are uploaded: Windows Setup/Portable, DMG/ZIP for both Mac architectures, matching corresponding source and `SHA256SUMS.txt`. The [three-platform release workflow](https://github.com/wei9719/ScholarNova/actions/runs/38919441705) completed successfully.
+Open the **[v1.2.14 download page](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.14)** or [latest release](https://github.com/wei9719/ScholarNova/releases/latest), expand Assets and choose your platform. All eight assets are uploaded: Windows Setup/Portable, DMG/ZIP for both Mac architectures, matching corresponding source and `SHA256SUMS.txt`. The [three-platform release workflow](https://github.com/wei9719/ScholarNova/actions/runs/39022556341) completed successfully.
 
 **Community desktop builds follow the selected AGPL open-source distribution route.** Each release must include package-specific notices and matching corresponding source, and pass the automated source checks and Windows / macOS smoke tests before publication. See the [distribution requirements](docs/DESKTOP_LICENSE_REVIEW.md) and each release's assets for available versions; older releases do not automatically contain the latest source changes.
 
 | Computer | Download | Install |
 | --- | --- | --- |
-| Windows 10/11, 64-bit | [Setup installer](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-Setup-1.2.13-x64.exe) | Run the installer; desktop and Start menu shortcuts are included |
-| Windows portable | [Portable executable](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-Portable-1.2.13-x64.exe) | Keep it in a permanent folder and launch |
-| macOS 13+, Apple Silicon (M-series) | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-arm64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-arm64.zip) | Drag the app into Applications; extract ZIP first |
-| macOS 13+, Intel | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-x64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.13/ScholarNova-1.2.13-x64.zip) | Drag the app into Applications; extract ZIP first |
+| Windows 10/11, 64-bit | [Setup installer](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-Setup-1.2.14-x64.exe) | Run the installer; desktop and Start menu shortcuts are included |
+| Windows portable | [Portable executable](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-Portable-1.2.14-x64.exe) | Keep it in a permanent folder and launch |
+| macOS 13+, Apple Silicon (M-series) | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-arm64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-arm64.zip) | Drag the app into Applications; extract ZIP first |
+| macOS 13+, Intel | [DMG](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-x64.dmg) / [ZIP](https://github.com/wei9719/ScholarNova/releases/download/v1.2.14/ScholarNova-1.2.14-x64.zip) | Drag the app into Applications; extract ZIP first |
 
 The desktop app bundles the interface, local backend and SQLite. No Python, Node.js or Docker is required. First launch may take longer while the portable runtime extracts. Quit before upgrading; personal data is stored outside the installation directory.
 
-For everyday Windows use, prefer **Setup**. Portable startup requires extraction and depends on the device and storage; automated smoke checks are not a universal performance guarantee. See [this release's live acceptance](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md); the earlier guidance-retry record remains in the [1.2.5 report](docs/reports/v1.2.5-assistant-retry.zh-CN.md).
+For everyday Windows use, prefer **Setup**. Portable startup requires extraction and depends on the device and storage; automated smoke checks are not a universal performance guarantee. See [this release's live acceptance](docs/reports/v1.2.14-functional-validation.zh-CN.md); the earlier guidance-retry record remains in the [1.2.5 report](docs/reports/v1.2.5-assistant-retry.zh-CN.md).
 
 This build requires macOS 13 or later, following [Electron 44's platform requirements](https://www.electronjs.org/blog/electron-44-0).
 
@@ -61,7 +61,7 @@ This build requires macOS 13 or later, following [Electron 44's platform require
 
 Basic keyword retrieval does not require an LLM key. Scholarly-source access depends on source policies, credentials, quota and network. AI operations use your configured provider and its billing.
 
-**New to the Assistant?** In ordinary knowledge chat, ask “How can I use you?” and explain the step you are on. Product guidance retains its compact guide, recent conversation and **Retry AI** recovery. Missing usage remains unknown, not free; research questions still require material. To read a paper passage by passage, choose **Guided reading** from paper detail and select a page/task. [Current acceptance report (中文)](docs/reports/v1.2.13-guided-reading-acceptance.zh-CN.md)
+**New to the Assistant?** In ordinary knowledge chat, ask “How can I use you?” and explain the step you are on. Product guidance retains its compact guide, recent conversation and **Retry AI** recovery. Missing usage remains unknown, not free; research questions still require material. To read a paper passage by passage, choose **Guided reading** from paper detail and select a page/task. [Current acceptance report (中文)](docs/reports/v1.2.14-functional-validation.zh-CN.md)
 
 ## Product preview
 

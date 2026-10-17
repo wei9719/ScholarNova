@@ -1,0 +1,42 @@
+{
+  "query": "道路交通流 缺失修复 大语言模型",
+  "capture_note": "U-STS/ARI metadata copied from local traffic-llm-case-20261017/candidate-papers.json. General Network abstract copied verbatim from the current live UI paragraph supplied by root; old candidate abstract was null. Before UI scores are root observations, not new API requests.",
+  "papers": [
+    {
+      "id": "555c34e8-cf43-5ed7-90d6-ba5d8c02ac31",
+      "title": "U-STS-LLM A Unified Spatio-Temporal Steered Large Language Model for Traffic Prediction and Imputation",
+      "abstract": "The efficient operation of modern cellular networks hinges on the accurate analysis of spatio-temporal traffic data. Mastering these patterns is essential for core network functions, chiefly forecasting future load to pre-empt congestion and imputing missing values caused by sensor failures or transmission errors to ensure data continuity. While deeply connected, forecasting and imputation have historically evolved as separate sub-fields. The dominant paradigm, Spatio-Temporal Graph Neural Networks (STGNNs), while effective, are often specialized, computationally intensive, and exhibit limited generalization. Concurrently, adapting large pre-trained language models (LLMs) offers a powerful alternative for sequence modeling, yet existing approaches provide weak structural guidance, leading to unstable convergence and a narrow focus on forecasting. To bridge these gaps, we propose U-STS-LLM, a unified framework built on a spatio-temporally steered LLM. Our core innovation is a Dynamic Spatio-Temporal Attention Bias Generator that synthesizes a persistent functional graph with transient nodal states to explicitly steer the LLM's attention. Coupled with a partially frozen backbone tuned via Low-Rank Adaptation (LoRA) and a Gated Adaptive Fusion mechanism, the model achieves stable, parameter-efficient adaptation. Trained under a unified multi-task objective, U-STS-LLM learns a holistic data representation. Extensive experiments on real-world cellular datasets demonstrate that U-STS-LLM establishes new state-of-the-art performance in both long-horizon forecasting and high-missing-rate imputation, while maintaining remarkable training efficiency and stability, offering a novel blueprint for harnessing foundation models in structured, non-linguistic domains.",
+      "year": 2026,
+      "citation_count": 0,
+      "is_open_access": true,
+      "source": "openalex",
+      "doi": "10.48550/arxiv.2605.11735",
+      "ui_road_relevance_before": 0.8
+    },
+    {
+      "id": "e4e7fa85-12c2-53b4-9c7f-da06e6e671ea",
+      "title": "ARI-LLM: Autoregressive Imputation for Network Traffic Matrix via Large Language Models",
+      "abstract": null,
+      "year": 2026,
+      "citation_count": 0,
+      "is_open_access": false,
+      "source": "crossref",
+      "doi": "10.1109/infocom59046.2026.11571176",
+      "ui_road_relevance_before": 0.8
+    },
+    {
+      "id": "274cefc9-2454-589e-b89f-fb1290c4321b",
+      "title": "General Network Traffic Anomaly Detection Method Based on Large Language Models",
+      "abstract": "Deep learning methods, while demonstrating strong performance in network traffic anomaly detection, often require large-scale training datasets and lack generalization ability. To address these issues, utilizing the powerful information extraction and reasoning capabilities of large language models, we propose a network traffic time series anomaly detection model with high generalizability. We design a text prototype construction method based on data reconstruction, to obtain a text prototype more suitable for the time series field; and we design a set of text templates, which provides effective information such as global data information, expert knowledge for anomaly detection tasks in large language models. Experiments show that our model achieves the best performance in anomaly detection and generalization compared to other methods.",
+      "year": 2025,
+      "citation_count": 0,
+      "is_open_access": false,
+      "source": "openalex",
+      "doi": "10.1109/mlnlp66797.2025.11389023",
+      "ui_road_relevance_before": 0.8,
+      "source_record": "W7131124169",
+      "venue": "MLNLP",
+      "captured_from": "Live UI paragraph supplied by root; not fetched by this regression task."
+    }
+  ]
+}

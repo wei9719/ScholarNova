@@ -52,6 +52,99 @@ async def test_v4_live_metadata_distinguishes_current_imputation_from_future_ext
     assert bool(ranked) is (name != "GSF-LLM")
 
 
+def traffic_domain_records():
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "search_traffic_domains_ui.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return fixture["query"], [Paper.model_validate(item) for item in fixture["papers"]]
+
+
+@pytest.mark.parametrize("name", ["U-STS-LLM", "ARI-LLM", "General Network"])
+async def test_live_network_only_metadata_is_not_a_road_traffic_imputation_match(name):
+    query, records = traffic_domain_records()
+    item = next(item for item in records if item.title.startswith(name))
+    assert await Ranker()._calculate_relevance(item, query) <= 0.35
+    assert not await Ranker().rank([item], query, minimum_relevance=0.45)
+    if name == "ARI-LLM":
+        assert item.abstract is None
+
+
+@pytest.mark.parametrize("name", ["U-STS-LLM", "ARI-LLM"])
+@pytest.mark.parametrize("query", [
+    "network traffic imputation large language models",
+    "网络流量 缺失修复 大语言模型",
+    "traffic imputation large language models",
+])
+async def test_network_papers_remain_usable_for_network_or_unspecified_traffic(query, name):
+    _, records = traffic_domain_records()
+    item = next(item for item in records if item.title.startswith(name))
+    assert await Ranker()._calculate_relevance(item, query) >= 0.7
+
+
+@pytest.mark.parametrize("name,minimum", [("GATGPT", 0.7), ("STD-PLM", 0.45), ("NuwaTS", 0.45)])
+async def test_road_query_keeps_transportation_and_unknown_domain_imputation_methods(name, minimum):
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "search_task_claims_v4.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    item = Paper.model_validate(next(p for p in fixture["papers"] if p["title"].startswith(name)))
+    score = await Ranker()._calculate_relevance(item, "道路交通流 缺失修复 大语言模型")
+    assert score >= minimum
+    if name != "GATGPT":
+        assert score < 0.7  # no traffic experiment is invented from metadata
+
+
+async def test_network_detection_text_prototype_reconstruction_is_not_current_imputation():
+    _, records = traffic_domain_records()
+    item = next(item for item in records if item.title.startswith("General Network"))
+    ranker = Ranker()
+    preference = Constraint(key="task_type", operator="eq", value="imputation")
+    assert ranker._paper_task_claim(item.title, item.abstract, "imputation") != "current"
+    assert ranker._calculate_constraint_score(item, [preference]) == 0.0
+    assert await ranker._calculate_relevance(item, "network traffic imputation large language models") <= 0.35
+    assert await ranker._calculate_relevance(item, "network traffic anomaly detection large language models") >= 0.7
+
+
+@pytest.mark.parametrize("abstract", [
+    "We design text prototypes and data reconstruction to impute missing observations.",
+    "We design text prototypes based on data reconstruction. We train language models for imputation.",
+])
+def test_representation_preprocessing_does_not_veto_an_independent_current_imputation_claim(abstract):
+    assert Ranker._paper_task_claim("A unified large language model", abstract, "imputation") == "current"
+
+
+@pytest.mark.parametrize("query,match,minimum,maximum", [
+    ("road network traffic imputation large language models", "road", 0.7, 1.0),
+    ("road network traffic imputation large language models", "network", 0.0, 0.35),
+    ("road traffic matrix imputation large language models", "network", 0.0, 0.35),
+    ("traffic matrix imputation large language models", "road", 0.7, 1.0),
+    ("cellular traffic imputation large language models", "road", 0.0, 0.35),
+    ("road traffic imputation large language models", "unknown", 0.45, 0.69),
+    ("road traffic imputation large language models", "graph", 0.7, 1.0),
+])
+async def test_traffic_domain_evidence_is_not_the_word_network_or_bare_traffic(query, match, minimum, maximum):
+    candidates = {
+        "road": paper("road", "Large language models for road traffic imputation"),
+        "network": paper("network", "Large language models for network traffic imputation"),
+        "unknown": paper("unknown", "Large language models for traffic imputation"),
+        "graph": paper("graph", "Large language models and graph attention networks for transportation imputation"),
+    }
+    assert minimum <= await Ranker()._calculate_relevance(candidates[match], query) <= maximum
+
+
+@pytest.mark.parametrize("query,title", [
+    ("memory bandwidth optimization large language models", "Large language models for memory optimization"),
+    ("intersection of healthcare and large language models", "Large language models in healthcare"),
+    ("cellular imputation large language models", "Large language models for imputation in cellular biology"),
+])
+async def test_traffic_disambiguation_does_not_reclassify_other_academic_topics(query, title):
+    assert Ranker._traffic_domain_evidence(query, title) is None
+    assert await Ranker()._calculate_relevance(paper("other-topic", title), query) >= 0.7
+
+
 @pytest.mark.parametrize(
     "abstract,expected",
     [

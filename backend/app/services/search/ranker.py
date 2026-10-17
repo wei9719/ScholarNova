@@ -293,7 +293,11 @@ class Ranker:
             domain_hit = (
                 not domain or len(domain & (title_tokens | abstract_tokens)) / len(domain) >= 0.5
             )
-            if "traffic" in domain:
+            traffic_domain = self._traffic_domain_evidence(scoring_query, evidence)
+            domain_conflict = False
+            if traffic_domain is not None:
+                domain_hit, domain_conflict = traffic_domain
+            elif "traffic" in domain:
                 # Domain vocabulary, not a whitelist of known papers. Speed,
                 # volume and cross-domain transportation studies need not say flow.
                 domain_hit = bool(
@@ -302,6 +306,10 @@ class Ranker:
             task_claim = self._paper_task_claim(title, abstract, facets["task"])
             task_hit = not facets["task"] or task_claim == "current"
             if not domain_hit:
+                if domain_conflict:
+                    # Explicitly different traffic domains are adjacent methods,
+                    # not proof of the requested road/communications application.
+                    return 0.35 if facets["task"] and method_hit and task_hit else 0.0
                 # An explicit model+task match may be a transferable method,
                 # but absent domain words never become proof of that domain.
                 return 0.45 if facets["task"] and method_hit and task_hit else 0.0
@@ -429,6 +437,48 @@ class Ranker:
         return min(base_score, 1.0)
 
     @staticmethod
+    def _traffic_domain_evidence(query: str, evidence: str) -> tuple[bool, bool] | None:
+        """Respect explicit road/communications scope; bare traffic stays ambiguous.
+
+        Return (target evidence, opposing-only evidence), or None for an
+        unspecified/multi-domain query. A graph/neural network is not telecom.
+        """
+        from app.services.search.query_planner import QueryPlanner
+
+        query_text = f"{query}\n{QueryPlanner._translate_to_english(query)}".casefold()
+        if not re.search(
+            r"\b(?:traffic|roads?|roadways?|highways?|freeways?|transportation|vehicles?|vehicular)\b|"
+            r"交通|道路|公路|车辆|车流|路网|流量", query_text,
+        ):
+            return None
+        road = re.compile(
+            r"\b(?:roads?|roadways?|highways?|freeways?|transportation|vehicles?|vehicular|"
+            r"urban mobility|intersections?|pems\d*|metr(?:-la)?)\b|道路|公路|高速公路|车辆|车流|路网"
+        )
+        communications = re.compile(
+            r"\b(?:cellular|telecom(?:munication)?s?|communication networks?|wireless networks?|"
+            r"computer networks?|network traffic|internet traffic|"
+            r"packets?|bandwidth)\b|蜂窝|通信网络|网络流量|网络流量矩阵"
+        )
+
+        def domains(text: str) -> tuple[bool, bool]:
+            normalized = f"{text}\n{QueryPlanner._translate_to_english(text)}".casefold()
+            # 'road network traffic' is a road network, not Internet traffic.
+            network_scope = re.sub(
+                r"\b(?:road|transportation|highway|vehicular)\s+networks?\b", "road", normalized
+            )
+            return bool(road.search(normalized)), bool(communications.search(network_scope))
+
+        query_road, query_communications = domains(query.casefold())
+        if query_road == query_communications:
+            return None
+        road_hit, communications_hit = domains(evidence.casefold())
+        target, opposing = (
+            (road_hit, communications_hit) if query_road else (communications_hit, road_hit)
+        )
+        return target, opposing and not target
+
+    @staticmethod
     def _paper_task_claim(title: str, abstract: str, task: str) -> str:
         """Classify metadata claims, not verified full-paper experiments or query intent.
 
@@ -484,6 +534,18 @@ class Ranker:
                 if not QueryPlanner.task_evidence(sentence, task):
                     continue
                 for mention in re.finditer(task_pattern, sentence):
+                    if (
+                        task == "imputation" and mention.group().startswith("data ")
+                        and re.search(
+                            r"\b(?:text prototypes?|text templates?|input representations?|"
+                            r"feature representations?|embeddings?)\b|文本原型|文本模板|输入表示|特征表示",
+                            sentence,
+                        )
+                        and not re.search(r"\b(?:missing|incomplete|imput\w*)\b", sentence)
+                    ):
+                        # Reconstructing a model's text/input representation is
+                        # not a claim to recover missing observations.
+                        continue
                     prefix, suffix = sentence[:mention.start()], sentence[mention.end():]
                     if negative.search(prefix):
                         continue

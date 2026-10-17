@@ -158,6 +158,71 @@ async def test_text_assistance_is_unsaved_and_grounded(reader_client, local_pape
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["explain", "prerequisite", "writing", "extension"])
+async def test_user_output_limits_override_optional_teaching_defaults(monkeypatch, mode):
+    from app.schemas.reader import ReaderAssistRequest
+    from app.services.reader import assist_page
+
+    question = "只用两句话确认本页插补数据集与RM/CM 70%定义，不给实验结果或额外练习。"
+    source = "插补数据集是PEMS08 [P2]。RM70%是随机缺失，CM70%是时空连续缺失 [P2]。"
+    model_result = _result()
+    model_result.content = json.dumps({
+        "source_notes": source, "teaching_notes": "", "exercise": "",
+    }, ensure_ascii=False)
+    chat = AsyncMock(return_value=model_result)
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    result = await assist_page(
+        "paper", "Title", ReaderAssistRequest(
+            mode=mode, page_number=2, content_hash="a" * 64, question=question,
+        ), {"text": "Imputation uses PEMS08. RM is random missing; CM is spatial-temporal continuity missing at 70%.", "text_verified": True},
+    )
+    system = chat.call_args.kwargs["messages"][0]["content"]
+    content = chat.call_args.kwargs["messages"][1]["content"]
+    assert "用户本次问题的输出范围、句数和禁止附加内容" in system
+    assert "优先于模式的默认教学安排" in system
+    assert "teaching_notes 和 exercise 均可为空字符串" in system
+    evidence = json.loads(content.split("\n\n输出前核对：")[0])
+    assert "user_question" not in evidence
+    assert content.count(question) == 1
+    assert "用户本次问题与输出要求（不是论文原文）" in content
+    example = content.split("不要照抄：\n", 1)[1]
+    template, _ = json.JSONDecoder().raw_decode(example)
+    assert template["teaching_notes"] == template["exercise"] == ""
+    assert result.source_notes == source
+    assert result.teaching_notes == result.exercise == ""
+    assert "教学补充" not in result.answer and "纸笔与自测" not in result.answer
+    assert result.model_completed is True and result.total_tokens == 81
+    chat.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_reading_can_still_return_teaching_and_exercise(monkeypatch):
+    from app.schemas.reader import ReaderAssistRequest
+    from app.services.reader import assist_page
+
+    chat = AsyncMock(return_value=_result())
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    result = await assist_page(
+        "paper", "Title", ReaderAssistRequest(
+            mode="explain", page_number=2, content_hash="a" * 64, question="帮我理解二元掩码",
+        ), {"text": "A binary mask marks observed values.", "text_verified": True},
+    )
+    assert result.model_completed and result.teaching_notes and result.exercise
+    assert "用户未限制时" in chat.call_args.kwargs["messages"][0]["content"]
+    chat.assert_awaited_once()
+
+
+def test_reader_response_schema_does_not_require_optional_teaching_fields():
+    from app.schemas.reader import ReaderAssistResponse
+
+    response = ReaderAssistResponse(
+        answer="本页事实 [P2]。", source_notes="本页事实 [P2]。", sources=[],
+        coverage="仅第2页", model_completed=True,
+    )
+    assert response.teaching_notes == response.exercise == ""
+
+
+@pytest.mark.asyncio
 async def test_translate_without_selection_uses_only_current_page(
     reader_client, local_paper, monkeypatch
 ):

@@ -110,3 +110,36 @@ async def test_duplicate_ids_do_not_inflate_evidence_and_missing_ids_are_reporte
     assert result.knowledge_count == 1
     assert any("已不存在" in warning for warning in result.warnings)
     assert call.await_args.kwargs["messages"][-1]["content"].count("ID=note") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["材料约束加两日计划，300字以内，不额外模型。", None, " \n\t "])
+async def test_user_research_structure_replaces_instead_of_appending_default_sections(db_session, monkeypatch, query):
+    db_session.add(KnowledgeBase(
+        id="structured-plan", title="已有实验笔记", category="交通流", content="尚未执行的实验约束",
+        research_points=[], tags=[],
+    ))
+    await db_session.commit()
+    call = AsyncMock(return_value=SimpleNamespace(
+        content="按指定结构给出的待运行计划", profile={"provider": "mock", "model": "mock"},
+        fallback_used=False, usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    ))
+    judge = AsyncMock(return_value=None)
+    monkeypatch.setattr(knowledge, "chat_with_fallback", call)
+    monkeypatch.setattr(knowledge, "judge_architecture", judge)
+    result = await knowledge.ai_analyze_research(AIAnalyzeRequest(
+        knowledge_ids=["structured-plan"], query=query,
+    ), db_session)
+    prompt = call.await_args.kwargs["messages"][-1]["content"]
+    defaults = ("1. 核心关注点", "2. 3-5个下一步研究方向", "3. 研究架构图")
+    if query and query.strip():
+        assert query in prompt
+        assert all(section not in prompt for section in defaults)
+        assert "不得额外附加默认章节" in prompt
+    else:
+        assert all(section in prompt for section in defaults)
+    assert "AI建议、个人想法各自身份" in prompt
+    assert "不是论文全文；不得声称已阅读完整论文" in prompt
+    assert result.total_tokens == 2 and result.model_completed
+    call.assert_awaited_once()
+    judge.assert_awaited_once()

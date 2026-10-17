@@ -50,7 +50,7 @@ const modes: Array<{
   en: string
   section: StudySection
 }> = [
-  { key: 'translate', zh: '翻译选段', en: 'Translate', section: 'translation' },
+  { key: 'translate', zh: '翻译原文', en: 'Translate', section: 'translation' },
   { key: 'explain', zh: '解释段落', en: 'Explain', section: 'overview' },
   { key: 'math', zh: '解释公式', en: 'Equations', section: 'math' },
   { key: 'figure', zh: '读图表', en: 'Figures', section: 'figures' },
@@ -305,14 +305,6 @@ export default function PaperReadingWorkspace({
   }
   const ask = async () => {
     if (!page || busy || !document?.available) return
-    if (mode === 'translate' && !selection.trim()) {
-      setError(
-        zh
-          ? '先在左侧选中一段原文，或粘贴本页中的原文。'
-          : 'Select or paste a passage from this page first.',
-      )
-      return
-    }
     const request = new AbortController()
     const identity = pageIdentity.current
     const input = {
@@ -539,8 +531,7 @@ export default function PaperReadingWorkspace({
     page &&
     !pageLoading &&
     !busy &&
-    !uploading &&
-    (mode !== 'translate' || selection.trim()),
+    !uploading,
   )
 
   return (
@@ -861,7 +852,9 @@ export default function PaperReadingWorkspace({
                     ? '先整理当前论文的指定页样例。它是样本观察，不是期刊官方规范，也不代表所有同刊文章。'
                     : mode === 'extension'
                       ? '提供后续阅读的方向、前置知识和可检索关键词；新论文与链接仍需通过真实检索核实。'
-                      : '选段优先；未选文字时使用当前页材料，不把整篇论文一次塞给模型。'
+                      : mode === 'translate'
+                        ? '选段优先；未选文字时翻译本页可提取文字（最多 8000 字符）。译文与教学说明分开显示。'
+                        : '选段优先；未选文字时使用当前页材料，不把整篇论文一次塞给模型。'
                 : mode === 'figure' || mode === 'math'
                   ? 'Sends this page image to your configured vision model. Missing vision configuration is reported explicitly.'
                   : 'Uses the selected passage or this page, not the entire paper at once.'}

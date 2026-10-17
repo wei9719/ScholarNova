@@ -53,7 +53,7 @@ function mergeConsecutiveDupLayers(layers: ArchLayer[]): ArchLayer[] {
  * 把 AI 评判提炼的统一架构 JSON 归一化成渲染结构；无效返回 null。
  * 这是"AI 中间评判一次 → 确定性 SVG 最终决定"流程的输入。
  */
-function normalizeJsonLayers(json: ArchitectureJson | null | undefined): { title: string; layers: ArchLayer[] } | null {
+export function normalizeJsonLayers(json: ArchitectureJson | null | undefined): { title: string; layers: ArchLayer[] } | null {
   if (!json || !Array.isArray(json.layers) || json.layers.length === 0) return null
   const layers: ArchLayer[] = []
   for (const item of json.layers) {
@@ -224,7 +224,7 @@ function parseLayers(text: string): ArchLayer[] {
  *       模块 = 白色圆角卡片（层主色描边 + 微阴影），行内居中排布；
  *       层间 = 虚线箭头流线。每层配色取自 7 色学术色板，自动循环。
  */
-function ArchitectureSvg({ title, layers }: { title: string; layers: ArchLayer[] }) {
+export function ArchitectureSvg({ title, layers, fitContainer = false }: { title: string; layers: ArchLayer[]; fitContainer?: boolean }) {
   // ---- 布局参数 ----
   const width = 840
   const modW = 176
@@ -348,7 +348,8 @@ function ArchitectureSvg({ title, layers }: { title: string; layers: ArchLayer[]
 
   return (
     <div className="overflow-x-auto rounded-lg">
-      <svg viewBox={`0 0 ${width} ${totalH}`} style={{ minWidth: 720, maxWidth: '100%' }} role="img"
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${width} ${totalH}`}
+        style={{ minWidth: fitContainer ? undefined : 720, maxWidth: '100%', width: '100%', height: 'auto' }} role="img"
         aria-label="研究架构图" className="w-full h-auto">
         <defs>
           <filter id="arch-shadow" x="-30%" y="-30%" width="160%" height="160%">

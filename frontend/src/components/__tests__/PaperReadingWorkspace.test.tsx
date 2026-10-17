@@ -165,7 +165,7 @@ it('loads the exact page without invoking AI and captures a real text selection'
   expect(screen.getByLabelText('选中原文（PDF 第 1 页）')).toHaveValue(
     'A Markov chain',
   )
-  fireEvent.click(screen.getByRole('button', { name: '翻译选段' }))
+  fireEvent.click(screen.getByRole('button', { name: '翻译原文' }))
   fireEvent.click(screen.getByRole('button', { name: '开始本次伴读' }))
   await screen.findByText(response.teaching_notes)
   expect(mocks.assist).toHaveBeenCalledWith(
@@ -181,11 +181,18 @@ it('loads the exact page without invoking AI and captures a real text selection'
   expect(screen.getByText(/siliconflow\/Qwen\/test/)).toBeInTheDocument()
 })
 
-it('requires a selection for translation and sends visual requests with their explicit page', async () => {
+it('translates the current page without a selection and sends visual requests with their explicit page', async () => {
   mount()
   await ready()
-  fireEvent.click(screen.getByRole('button', { name: '翻译选段' }))
-  expect(screen.getByRole('button', { name: '开始本次伴读' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: '翻译原文' }))
+  expect(screen.getByText(/未选文字时翻译本页/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '开始本次伴读' }))
+  await screen.findByText(response.teaching_notes)
+  expect(mocks.assist).toHaveBeenCalledWith(
+    'p1',
+    expect.objectContaining({ mode: 'translate', page_number: 1, selection: '' }),
+    expect.any(AbortSignal),
+  )
   fireEvent.click(screen.getByRole('button', { name: '读图表' }))
   fireEvent.click(screen.getByRole('button', { name: '下一页' }))
   await screen.findByAltText('论文 PDF 第 2 页')

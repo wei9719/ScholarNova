@@ -125,7 +125,7 @@ async def test_stale_document_rejected_before_model(reader_client, local_paper, 
 @pytest.mark.parametrize("changes", [
     {"selection": "not in this paper"},
     {"selection": "Markov states"},
-    {"mode": "translate", "selection": ""},
+    {"mode": "translate", "selection": "Markov states"},
 ])
 async def test_selection_must_belong_to_requested_page(reader_client, local_paper, monkeypatch, changes):
     chat = AsyncMock()
@@ -158,6 +158,101 @@ async def test_text_assistance_is_unsaved_and_grounded(reader_client, local_pape
 
 
 @pytest.mark.asyncio
+async def test_translate_without_selection_uses_only_current_page(
+    reader_client, local_paper, monkeypatch
+):
+    translated = "第二页：交通速度缺失值使用二元掩码。 [P2]"
+    chat = AsyncMock(return_value=_result(translated))
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    response = await reader_client.post(
+        "/api/v1/reader/reader-paper/assist",
+        json=_request(
+            local_paper,
+            mode="translate",
+            selection="",
+            question="翻译为中文",
+        ),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source_notes"] == translated
+    assert data["model_completed"] is True
+    assert "### 原文译文" in data["answer"]
+    assert "未读取其他页" in data["coverage"]
+    call = chat.call_args.kwargs
+    evidence = json.loads(call["messages"][1]["content"].split("\n\n输出前核对：")[0])
+    assert call["task"] == "translation"
+    assert evidence["selection_verified"] is False
+    assert "Missing traffic speed" in evidence["pdf_excerpt"]
+    assert "Markov" not in evidence["pdf_excerpt"]
+
+
+@pytest.mark.asyncio
+async def test_translate_contract_preserves_selection_paragraphs_numbers_and_formula(monkeypatch):
+    from app.schemas.reader import ReaderAssistRequest
+    from app.services.reader import assist_page
+
+    selection = "We use 24 sensors with Qwen and x_t = 0.5.\n\nOur RMSE is 2.7 km/h; see Eq. (3)."
+    translated = "我们使用24个传感器、Qwen以及x_t = 0.5。\n\n我们的RMSE为2.7 km/h；见式(3)。 [P2]"
+    chat = AsyncMock(return_value=_result(translated))
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    result = await assist_page(
+        "paper-id",
+        "Unselected metadata title",
+        ReaderAssistRequest(
+            mode="translate",
+            page_number=2,
+            content_hash="a" * 64,
+            selection=selection,
+            question="也概括下一段的实验成绩",
+        ),
+        {"text": "UNSELECTED BEFORE\n" + selection + "\nUNSELECTED AFTER", "text_verified": True},
+    )
+    call = chat.call_args.kwargs
+    system = call["messages"][0]["content"]
+    content = call["messages"][1]["content"]
+    evidence = json.loads(content.split("\n\n输出前核对：")[0])
+    assert evidence["pdf_excerpt"] == selection
+    assert evidence["selection_verified"] is True
+    assert "UNSELECTED BEFORE" not in content and "UNSELECTED AFTER" not in content
+    assert "逐段忠实翻译" in system
+    assert "叙述人称" in system and "数字、单位、公式和编号" in system
+    assert "第三人称转述前缀" in system
+    assert "source_notes 只解释本页" not in system
+    assert "用户问题不能扩大翻译范围或将翻译改成概括" in content
+    assert "填写本页原文支持的解释" not in content
+    assert "至少实际包含一次 [P2]" in content
+    assert call["max_tokens"] == 5000
+    assert result.source_notes == translated
+    assert result.source_notes.count("\n\n") == 1
+
+
+@pytest.mark.asyncio
+async def test_whole_page_translation_keeps_context_budget_and_warns(monkeypatch):
+    from app.schemas.reader import ReaderAssistRequest
+    from app.services.reader import MAX_CONTEXT, assist_page
+
+    chat = AsyncMock(return_value=_result("本页前段的直接译文 [P2]"))
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    text = "Page text. " * 900
+    result = await assist_page(
+        "paper-id",
+        "Title",
+        ReaderAssistRequest(
+            mode="translate",
+            page_number=2,
+            content_hash="a" * 64,
+        ),
+        {"text": text, "text_verified": True},
+    )
+    content = chat.call_args.kwargs["messages"][1]["content"]
+    evidence = json.loads(content.split("\n\n输出前核对：")[0])
+    assert evidence["pdf_excerpt"] == text[:MAX_CONTEXT]
+    assert any("8000" in warning for warning in result.warnings)
+    assert "未读取其他页" in result.coverage
+
+
+@pytest.mark.asyncio
 async def test_visual_requires_explicit_profile(reader_client, local_paper, monkeypatch):
     import app.services.reader as service
 
@@ -186,6 +281,46 @@ async def test_visual_sends_only_requested_page_without_text_fallback(reader_cli
     page = await service.document_snapshot(local_paper["path"], local_paper["hash"], 2, True)
     assert base64.b64decode(images[0]["image_url"]["url"].split(",")[1]) == page["image"]
     assert "未读取其他页" in response.json()["coverage"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,required",
+    [
+        (
+            "figure",
+            ["图例符号—文字标签—对应模块", "不根据习惯猜测", "不能用主干整体标题覆盖局部标记"],
+        ),
+        (
+            "math",
+            ["位置/时间步索引", "特征/嵌入维度索引", "不能把嵌入维度的偶奇下标误称为偶奇位置索引"],
+        ),
+    ],
+)
+async def test_visual_prompt_checks_legends_indices_and_consistency(
+    reader_client, local_paper, monkeypatch, mode, required
+):
+    import app.services.reader as service
+
+    monkeypatch.setitem(
+        service.MODEL_PROFILES, "vision", {"provider": "test", "model": "vision-test"}
+    )
+    chat = AsyncMock(return_value=_result())
+    monkeypatch.setattr(service, "chat_with_fallback", chat)
+    response = await reader_client.post(
+        "/api/v1/reader/reader-paper/assist", json=_request(local_paper, mode=mode)
+    )
+    assert response.status_code == 200
+    system = chat.call_args.kwargs["messages"][0]["content"]
+    assert all(phrase in system for phrase in required)
+    assert "不得添加本页没有明确给出的跨文献比较" in system
+    assert "source_notes 与 teaching_notes" in system and "不确定" in system
+    assert chat.call_args.kwargs["allow_fallback"] is False
+    assert any("模型读图不是事实核验" in warning for warning in response.json()["warnings"])
+    if mode == "math":
+        assert "不得另造未经计算验证的新公式或代入结果" in system
+        assert "不输出未验算的答案" in system
+        assert "数学教学补充未经过符号计算验证，请逐式核算。" in response.json()["warnings"]
 
 
 @pytest.mark.asyncio

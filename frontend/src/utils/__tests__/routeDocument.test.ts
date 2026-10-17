@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRouteDocumentHtml } from '../routeDocument'
+import { buildRouteDocumentHtml, cleanRouteMarkdown } from '../routeDocument'
 
 const origin = 'http://127.0.0.1:5173'
 const route = { title: '研究路线', status: 'active', description: '', ai_analysis: '' }
@@ -63,5 +63,66 @@ describe('research route document export', () => {
       'https://images.example/route.png?a=1&b=2',
       'http://images.example/route.png',
     ])
+  })
+
+  it('exports the deterministic structure when the image model returned HTTP 404', () => {
+    const architecture = { title: '交通流缺失修复', layers: [
+      { name: '数据准备', modules: [{ name: '时间划分' }, { name: '缺失掩码' }] },
+      { name: '严格评估', modules: [{ name: '误差计算' }], formula: 'Eval = O ∩ H' },
+    ] }
+    const analysis = `## 文字分析（zhipu/glm-5.2）\n先建立基线。\n## 研究架构图（sensenova/u1-fast）\n结构说明\n<ARCH_JSON>${JSON.stringify(architecture)}</ARCH_JSON>\n图像服务返回 HTTP 404\n## 科研阶段路线图\n完成基线后再评估。`
+    const doc = parse(buildRouteDocumentHtml({ ...route, ai_analysis: analysis }, origin))
+    const svg = doc.querySelector('svg')
+    expect(svg).not.toBeNull()
+    expect(svg?.textContent).toContain('交通流缺失修复')
+    expect(svg?.textContent).toContain('缺失掩码')
+    expect(svg?.textContent).toContain('Eval = O ∩ H')
+    expect(svg?.style.width).toBe('100%')
+    expect(svg?.style.height).toBe('auto')
+    expect(svg?.style.minWidth).toBe('')
+    expect(doc.body.textContent).toContain('确定性 SVG 绘制，非图像模型生成')
+    expect(doc.body.textContent).toContain('图像服务返回 HTTP 404')
+    expect(doc.body.textContent).toContain('完成基线后再评估')
+    expect(doc.body.textContent).not.toContain('ARCH_JSON')
+    expect(doc.body.textContent).not.toContain('"modules"')
+    expect(doc.querySelectorAll('img')).toHaveLength(0)
+    expect(cleanRouteMarkdown(analysis)).not.toContain('"layers"')
+  })
+
+  it('prefers explicit architecture data and preserves generated image references separately', () => {
+    const doc = parse(buildRouteDocumentHtml({
+      ...route,
+      architecture_json: { title: '当前结构', layers: [{ name: '输入层', modules: [{ name: '用户数据' }] }] },
+      ai_analysis: '<ARCH_JSON>{"title":"旧结构","layers":[{"name":"旧层","modules":[{"name":"旧模块"}]}]}</ARCH_JSON>\n![模型图](/generated/route.png)',
+    }, origin))
+    expect(doc.querySelector('svg')?.textContent).toContain('当前结构')
+    expect(doc.body.textContent).not.toContain('旧结构')
+    expect(doc.querySelector('img')?.getAttribute('src')).toBe(`${origin}/generated/route.png`)
+  })
+
+  it.each([
+    '<ARCH_JSON>{not valid JSON}</ARCH_JSON>',
+    '<ARCH_JSON>{"layers":[{"name":"空层","modules":[]}]}</ARCH_JSON>',
+    '<ARCH_JSON>{"layers":"<svg onload=alert(1)>"}</ARCH_JSON>',
+    '<ARCH_JSON>{"layers":[',
+  ])('falls back to text and omits invalid or incomplete architecture blocks: %s', (block) => {
+    const doc = parse(buildRouteDocumentHtml({ ...route, ai_analysis: `已有文字分析。\n${block}` }, origin))
+    expect(doc.body.textContent).toContain('已有文字分析')
+    expect(doc.body.textContent).toContain('暂无可用的结构化架构数据')
+    expect(doc.body.textContent).not.toContain('ARCH_JSON')
+    expect(doc.body.textContent).not.toContain('layers')
+    expect(doc.querySelectorAll('svg, script, iframe, object')).toHaveLength(0)
+  })
+
+  it('treats malicious JSON field values only as SVG text and never renders supplied markup', () => {
+    const malicious = '<script>alert(1)</script><image href="https://evil.example/track" onload="alert(1)" />'
+    const doc = parse(buildRouteDocumentHtml({ ...route, ai_analysis: `<ARCH_JSON>${JSON.stringify({
+      title: malicious,
+      layers: [{ name: malicious, modules: [{ name: malicious }], formula: malicious }],
+    })}</ARCH_JSON>` }, origin))
+    expect(doc.querySelector('svg')?.textContent).toContain(malicious)
+    expect(doc.querySelectorAll('script, image, img, iframe, object, foreignObject')).toHaveLength(0)
+    expect([...doc.querySelectorAll('*')].flatMap((el) => [...el.attributes])
+      .some((attr) => attr.name.startsWith('on'))).toBe(false)
   })
 })

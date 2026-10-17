@@ -240,8 +240,8 @@ export default function WritingSamplesPanel({
       <h3>{zh ? '多篇写作样例对照' : 'Compare writing samples'}</h3>
       <p className="reader-hint">
         {zh
-          ? '选择 2–5 篇已导入本地全文的论文。只比较每篇首、次、末页的有界摘录，整理摘要、标题、图表衔接等写作功能，不代表整本期刊的统一规范。'
-          : 'Choose 2–5 local full-text papers. Compare bounded excerpts from their first, second and last pages, not journal-wide rules.'}
+          ? '选择 2–5 篇已导入本地全文的论文。优先定位摘要与结论，每篇最多 4800 字符；未找到时明确提示回退页。比较写作功能，不代表整本期刊的统一规范。'
+          : 'Choose 2–5 local full-text papers. Locate abstract and conclusion excerpts, up to 4,800 characters per paper; fallback pages are identified. These are sample observations, not journal-wide rules.'}
       </p>
       {loading ? (
         <p role="status" className="reader-status">

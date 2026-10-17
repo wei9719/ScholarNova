@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 
 from app.models.paper import PaperChunk, PaperEntity
 from app.schemas.study import StudyDraftRequest, StudyDraftResponse, StudySource
@@ -40,6 +40,10 @@ _EMAIL = re.compile(
 )
 _CITATION = re.compile(r"\[S(\d+)\]")
 _MARKDOWN_LINK = re.compile(r"!?\[([^\]\n]{0,200})\]\(\s*<?([^\s)>]+)>?[^)\n]*\)")
+_MATH_SIGNAL = re.compile(
+    r"[=∑∏∂∇∈θλαβγσ]|\b(?:sin|cos|softmax|argmin|argmax)\b|\(\d{1,2}\)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 _SECTION_FOCUS = {
     "overview": "研究问题、方法、主要发现和局限，只归纳本次材料支持的内容。",
@@ -53,9 +57,12 @@ _SECTION_FOCUS = {
 }
 _SECTION_TERMS = {
     "overview": ("abstract", "introduction", "conclusion", "摘要", "结论"),
-    "experiments": ("experiment", "evaluation", "result", "dataset", "method", "实验", "结果"),
-    "resources": ("code", "data", "availability", "资源", "代码"),
-    "math": ("equation", "theorem", "proof", "method", "formulation", "公式", "推导"),
+    "experiments": ("experiment", "evaluation", "result", "dataset", "training", "validation",
+                    "missing", "mask", "metric", "mae", "rmse", "ablation", "learning rate",
+                    "实验", "结果", "数据集", "缺失", "划分"),
+    "resources": ("github", "code", "repository", "availability", "dataset", "资源", "代码", "邮箱"),
+    "math": ("equation", "theorem", "proof", "formulation", "embedding", "attention",
+             "loss", "softmax", "normalization", "公式", "推导", "定义"),
     "prerequisites": ("background", "related", "introduction", "背景"),
     "writing": ("introduction", "discussion", "conclusion", "引言"),
     "figures": ("figure", "table", "图", "表"),
@@ -99,12 +106,75 @@ def _excerpt(text: str, section: str, question: str | None) -> str:
     if section == "resources":
         matches = _resources(text)
         anchor = matches[0][0] if matches else 0
-    elif question:
-        terms = re.findall(r"[A-Za-z0-9]{3,}|[\u4e00-\u9fff]{2,}", question.casefold())[:12]
+    else:
+        terms = _SECTION_TERMS[section]
         positions = [text.casefold().find(term) for term in terms if term in text.casefold()]
+        if section == "math":
+            equations = [match.start() for match in re.finditer(r"[=∑∏∂∇]", text)]
+            signals = [match.start() for match in _MATH_SIGNAL.finditer(text)]
+            positions = equations or signals or positions
+        if not positions and question:
+            positions = [text.casefold().find(term) for term in _question_terms(question)
+                         if term in text.casefold()]
         anchor = min(positions) if positions else 0
     start = max(0, anchor - 160)
     return text[start:start + MAX_EXCERPT_CHARS].strip()
+
+
+def _question_terms(question: str | None) -> list[str]:
+    return list(dict.fromkeys(re.findall(
+        r"[A-Za-z0-9]{3,}|[\u4e00-\u9fff]{2,}", (question or "").casefold(),
+    )))[:12]
+
+
+def _material_score(text: str, heading: str, section: str, question: str | None) -> int:
+    lowered = text.casefold()
+    terms = _SECTION_TERMS[section]
+    score = 4 * sum(term in lowered for term in terms)
+    score += 2 * sum(term in heading.casefold() for term in terms)
+    # Generic instructions mentioning code/email must not overpower the actual
+    # requested experiment or mathematical evidence.
+    score += min(sum(term in lowered for term in _question_terms(question)), 3)
+    if section == "resources":
+        score += min(len(_resources(text)), 10) * 10
+    if section == "math":
+        score += min(len(_MATH_SIGNAL.findall(text)), 12) * 3
+    return score
+
+
+def _selection_priority(section: str, question: str | None):
+    """Rank within one paper on the database, before the 80-row text cap."""
+    text = func.lower(func.substr(PaperChunk.content, 1, MAX_CANDIDATE_CHARS))
+    heading = func.lower(func.coalesce(PaperChunk.heading, ""))
+    terms = _SECTION_TERMS[section]
+    score = sum((case((text.contains(term, autoescape=True), 4), else_=0)
+                 + case((heading.contains(term, autoescape=True), 2), else_=0)
+                 for term in terms), start=0)
+    for term in _question_terms(question)[:8]:
+        score += case((text.contains(term, autoescape=True), 1), else_=0)
+    if section == "math":
+        for symbol in ("=", "∑", "∏", "∂", "∇", "∈", "θ", "λ", "α", "β", "γ", "σ"):
+            score += case((text.contains(symbol), 3), else_=0)
+    if section == "resources":
+        score += case((or_(text.contains("https://"), text.contains("http://"), text.contains("@")), 20), else_=0)
+    return score if not isinstance(score, int) else case((PaperChunk.id.is_not(None), 0), else_=0)
+
+
+def _deduplicate_sources(candidates: list[tuple[int, StudySource, bool]]) -> list[tuple[int, StudySource, bool]]:
+    selected: list[tuple[int, StudySource, bool]] = []
+    normalized: list[str] = []
+    for item in sorted(candidates, key=lambda item: (item[0], item[2]), reverse=True):
+        text = " ".join(item[1].excerpt.casefold().split())
+        # Preserve distinct equations/operators. Only exact text or substantial
+        # literal containment is duplicate evidence, not shared topic words.
+        if any(text == other or (min(len(text), len(other)) >= 200
+                                and (text in other or other in text)) for other in normalized):
+            continue
+        selected.append(item)
+        normalized.append(text)
+        if len(selected) == MAX_SOURCES:
+            break
+    return selected
 
 
 async def load_study_material(
@@ -122,28 +192,22 @@ async def load_study_material(
             PaperChunk.kind, PaperChunk.page,
             func.substr(PaperChunk.content, 1, MAX_CANDIDATE_CHARS).label("text"),
         ).where(PaperChunk.paper_id == request.paper_id)
-          .order_by(PaperChunk.position).limit(MAX_CANDIDATE_CHUNKS))).all()
+          .order_by(_selection_priority(request.section, request.question).desc(), PaperChunk.position)
+          .limit(MAX_CANDIDATE_CHUNKS))).all()
         candidates: list[tuple[int, StudySource, bool]] = []
         abstract = (paper[1] or "").strip()
         if abstract.casefold() not in {"", "n/a", "none", "暂无摘要", "摘要信息缺失"}:
-            candidates.append((1, StudySource(
+            candidates.append((_material_score(abstract, "摘要", request.section, request.question) + 1, StudySource(
                 label="", id=f"abstract:{request.paper_id}",
                 content_hash=hashlib.sha256(abstract.encode("utf-8")).hexdigest(),
                 section="摘要", excerpt=_excerpt(abstract, request.section, request.question),
             ), False))
-        terms = _SECTION_TERMS[request.section]
-        query_terms = re.findall(
-            r"[A-Za-z0-9]{3,}|[\u4e00-\u9fff]{2,}", (request.question or "").casefold(),
-        )[:12]
         for row in rows:
             text = (row.text or "").strip()
             if not text:
                 continue
             heading = str(row.heading or row.kind or "正文")[:200]
-            score = 2 * sum(term in heading.casefold() for term in terms)
-            score += sum(term in text.casefold() for term in query_terms)
-            if request.section == "resources":
-                score += min(len(_resources(text)), 10) * 10
+            score = _material_score(text, heading, request.section, request.question)
             candidates.append((score, StudySource(
                 label="", id=row.id, content_hash=row.content_hash,
                 section=heading, page=row.page if row.page and row.page > 0 else None,
@@ -154,7 +218,7 @@ async def load_study_material(
                 (score + min(len(_resources(source.excerpt)), 10) * 10, source, fulltext)
                 for score, source, fulltext in candidates
             ]
-        selected = sorted(candidates, key=lambda item: item[0], reverse=True)[:MAX_SOURCES]
+        selected = _deduplicate_sources(candidates)
         sources = [source.model_copy(update={"label": f"S{index}"})
                    for index, (_, source, _) in enumerate(selected, 1)]
         fulltext = any(item[2] for item in selected)
@@ -162,6 +226,7 @@ async def load_study_material(
             "仅使用所列本地材料节选，未下载PDF、读取图像或联网核验；不代表已阅读完整论文。"
             if fulltext else "本次仅使用本地摘要，未读取全文、图像或联网核验。",
             "页码来自解析记录；章节片段的页码可能仅表示章节起始页，请对照原文核查。",
+            "按本栏目正文线索选取并去除重复节选，来源编号、片段哈希与页码仅对应下列实际材料。",
         ]
         if len(candidates) > MAX_SOURCES or len(rows) == MAX_CANDIDATE_CHUNKS:
             warnings.append("为控制上下文，本次仅选择部分本地片段；未出现的信息不等于论文未公开。")

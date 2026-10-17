@@ -145,7 +145,17 @@ async def test_comparison_is_one_bounded_call_with_page_hashes(samples_client, l
         paper = next(item for item in local_samples if item["id"] == source["paper_id"])
         assert source["content_hash"] == paper["hash"]
         assert source["page_number"] in {1, 2}
-        assert len(source["excerpt"]) <= 1600
+        assert len(source["excerpt"]) <= 4800
+    assert all(
+        sum(
+            len(source["excerpt"])
+            for source in data["sources"]
+            if source["paper_id"] == paper["id"]
+        )
+        <= 4800
+        for paper in local_samples
+    )
+    assert sum(len(source["excerpt"]) for source in data["sources"]) <= 24000
     assert any("不同" in warning and "同一期刊" in warning for warning in data["warnings"])
     assert any("官方作者指南尚未核对" in warning for warning in data["warnings"])
     chat.assert_awaited_once()
@@ -232,3 +242,90 @@ async def test_model_timeout_preserves_attempts(samples_client, local_samples, m
     assert data["model_completed"] is False
     assert data["usage"]["request_attempts"] == 1
     assert data["model_attempts"][0]["error_type"] == "TimeoutError"
+
+
+def _write_long_sections(path, cover=False):
+    import pymupdf
+
+    with pymupdf.open() as pdf:
+        if cover:
+            pdf.new_page().insert_text((40, 50), "Cover title without an abstract.")
+        page = pdf.new_page()
+        abstract = (
+            "Abstract\n"
+            + ("We study missing observations and evaluate graph models. " * 38)
+            + "ABSTRACT_FINAL_SENTENCE."
+        )
+        page.insert_textbox(pymupdf.Rect(40, 40, 560, 580), abstract, fontsize=10)
+        page.insert_textbox(
+            pymupdf.Rect(40, 610, 560, 740),
+            "1\nIntroduction\nINTRODUCTION_ONLY, not abstract evidence.",
+            fontsize=10,
+        )
+        pdf.new_page().insert_text((40, 60), "2 Methods\nMETHODS_ONLY describes the experiment.")
+        pdf.new_page().insert_textbox(
+            pymupdf.Rect(40, 40, 560, 700),
+            "5\nConclusion\n"
+            + "The method reconstructs missing observations under tested assumptions. " * 5
+            + "CONCLUSION_FINAL_SENTENCE.",
+            fontsize=11,
+        )
+        pdf.new_page().insert_text(
+            (40, 50), "References\nREFERENCES_ONLY must not replace the conclusion."
+        )
+        pdf.save(path)
+
+
+@pytest.mark.parametrize("cover", [False, True])
+def test_writing_snapshot_keeps_long_abstract_and_actual_conclusion_before_references(
+    tmp_path, cover
+):
+    from app.services.reader import _writing_snapshot
+
+    path = tmp_path / "long-sections.pdf"
+    _write_long_sections(path, cover)
+    snapshot = _writing_snapshot(path, None)
+    abstracts = [sample for sample in snapshot["samples"] if sample["section"] == "abstract"]
+    conclusions = [sample for sample in snapshot["samples"] if sample["section"] == "conclusion"]
+    assert len(abstracts) == len(conclusions) == 1
+    assert len(abstracts[0]["text"]) > 1600
+    assert "ABSTRACT_FINAL_SENTENCE" in abstracts[0]["text"]
+    assert "INTRODUCTION_ONLY" not in abstracts[0]["text"]
+    assert abstracts[0]["page_number"] == (2 if cover else 1)
+    assert conclusions[0]["page_number"] == (4 if cover else 3)
+    assert "CONCLUSION_FINAL_SENTENCE" in conclusions[0]["text"]
+    assert "REFERENCES_ONLY" not in conclusions[0]["text"]
+    assert sum(len(sample["text"]) for sample in snapshot["samples"]) <= 4800
+    assert snapshot["content_hash"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert snapshot["warnings"] == []
+
+
+def test_writing_snapshot_fallback_is_not_mislabelled_as_abstract_or_conclusion(tmp_path):
+    import pymupdf
+
+    from app.services.reader import _writing_snapshot
+
+    path = tmp_path / "no-headings.pdf"
+    with pymupdf.open() as pdf:
+        for _ in range(2):
+            pdf.new_page().insert_textbox(
+                pymupdf.Rect(40, 40, 560, 740),
+                "Body text without identifiable section titles. " * 30,
+            )
+        pdf.save(path)
+    snapshot = _writing_snapshot(path, None)
+    assert all(sample["section"] == "page_fallback" for sample in snapshot["samples"])
+    assert any("不能将退回内容称为摘要" in warning for warning in snapshot["warnings"])
+    assert any("不能将退回内容称为结论" in warning for warning in snapshot["warnings"])
+    assert sum(len(sample["text"]) for sample in snapshot["samples"]) <= 4800
+
+
+def test_writing_section_truncation_is_bounded_and_explicit():
+    from app.services.reader import _writing_section
+
+    document = SimpleNamespace(page_count=1)
+    samples, truncated = _writing_section(
+        document, {0: ["Abstract", "x" * 5000]}, (0, 0), 3200, 1, "abstract"
+    )
+    assert sum(len(sample["text"]) for sample in samples) == 3200
+    assert samples[0]["truncated"] is True and truncated is True

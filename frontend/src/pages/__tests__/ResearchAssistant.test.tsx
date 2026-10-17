@@ -56,6 +56,44 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+it('distinguishes checked citation markers from actually cited PDF text and shows zero PDF excerpts', async () => {
+  const result: AgentChatResponse = {
+    ...productHelp,
+    response_type: 'research', answer: '现有笔记记载了PEMS08，但本次没有引用原文页。',
+    grounded: true, verification_status: 'verified', citation_coverage: 1,
+    citations: [{ id: 'S1', source: 'knowledge', title: 'STD-PLM', item_id: 'note-1', chunk_index: 1 }],
+    tool_steps: [{ tool: 'paper_fulltext_search', status: 'completed', count: 0, detail: '从PDF候选中选择了0个片段' }],
+  }
+  await renderSavedAnswer(result)
+
+  expect(screen.getByText('引用标记检查通过')).toHaveAttribute('title', '检查引用标记与材料编号是否对应，不代表事实正确或全文覆盖完整。')
+  expect(screen.getByText('本次引用来源：知识笔记；未引用 PDF 原文。')).toBeInTheDocument()
+  expect(screen.getByText('paper_fulltext_search · completed · 0')).toBeInTheDocument()
+  expect(screen.queryByText('引用校验通过')).not.toBeInTheDocument()
+})
+
+it('shows the exact cited PDF page without claiming complete-paper coverage', async () => {
+  const result: AgentChatResponse = {
+    ...productHelp,
+    response_type: 'research', answer: '依据第8页，RM和CM缺失率均为70%。',
+    grounded: true, verification_status: 'verified', citation_coverage: 1,
+    citations: [{ id: 'S1', source: 'paper', title: 'STD-PLM', item_id: 'paper-1', page: 8, section: 'Full text' }],
+    tool_steps: [{ tool: 'paper_fulltext_search', status: 'completed', count: 1 }],
+  }
+  await renderSavedAnswer(result)
+
+  expect(screen.getByText('本次引用来源：PDF 原文；PDF 第 8 页。')).toBeInTheDocument()
+  expect(screen.getByText('paper_fulltext_search · completed · 1')).toBeInTheDocument()
+  expect(screen.queryByText(/完整论文已读取/)).not.toBeInTheDocument()
+})
+
+it('offers an in-category example instead of excluded Zotero when a category is selected', async () => {
+  useAssistantStore.getState().setKnowledgeCategory('guide-chat', '交通')
+  render(<ResearchAssistant />)
+  expect(await screen.findByRole('button', { name: '比较当前分类文献中常见的方法路线' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '比较 Zotero 文献中常见的方法路线' })).not.toBeInTheDocument()
+})
+
 function expectNoResearchWarnings() {
   expect(screen.queryByText('材料不足')).not.toBeInTheDocument()
   expect(screen.queryByText(/BM25/)).not.toBeInTheDocument()

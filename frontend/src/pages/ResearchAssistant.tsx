@@ -100,7 +100,7 @@ function ResearchAssistantChat() {
     detecting: '检测中',
     emptyTitle: '从一个研究问题开始',
     emptyDesc: '智能体会先执行本地资料检索，再调用你配置的模型组织回答。它不会自动修改 Zotero。',
-    placeholder: '例如：现有材料对联邦学习中的隐私风险形成了哪些共识？',
+    placeholder: '例如：这篇论文使用了什么数据集和实验方法？请标明来源。',
     send: '发送',
     clear: '清空对话',
     folders: '研究文件夹',
@@ -127,7 +127,8 @@ function ResearchAssistantChat() {
     noSource: '本次没有可引用材料',
     grounded: '基于本地材料',
     notGrounded: '材料不足',
-    verified: '引用校验通过',
+    verified: '引用标记检查通过',
+    verificationHint: '检查引用标记与材料编号是否对应，不代表事实正确或全文覆盖完整。',
     partial: '引用覆盖不完整',
     verificationFailed: '引用校验失败',
     fallback: '模型离线 · 证据回退',
@@ -165,7 +166,7 @@ function ResearchAssistantChat() {
     detecting: 'Detecting',
     emptyTitle: 'Start with a research question',
     emptyDesc: 'The assistant retrieves local evidence before calling your configured model. It never modifies Zotero automatically.',
-    placeholder: 'For example: What consensus do my sources show about privacy risks in federated learning?',
+    placeholder: 'For example: Which datasets and methods did this paper use? Cite the sources.',
     send: 'Send',
     clear: 'Clear conversation',
     folders: 'Research folders',
@@ -192,7 +193,8 @@ function ResearchAssistantChat() {
     noSource: 'No citable local material was found',
     grounded: 'Grounded locally',
     notGrounded: 'Insufficient material',
-    verified: 'Citation checks passed',
+    verified: 'Citation markers checked',
+    verificationHint: 'Checks source markers and citation coverage, not factual accuracy or complete PDF coverage.',
     partial: 'Partial citation coverage',
     verificationFailed: 'Citation checks failed',
     fallback: 'Model offline · evidence fallback',
@@ -470,9 +472,14 @@ function ResearchAssistantChat() {
                   <h2 className="mt-5 text-lg font-bold text-[var(--ui-text)]">{copy.emptyTitle}</h2>
                   <p className="mt-2 text-sm leading-6 text-[var(--ui-text-soft)]">{copy.emptyDesc}</p>
                   <div className="mt-6 grid w-full gap-2 sm:grid-cols-3">
-                    {copy.examples.map((example) => (
-                      <button key={example} onClick={() => setQuestion(example)} className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] px-3 py-3 text-left text-xs leading-5 text-[var(--ui-text-soft)] transition hover:border-[var(--ui-border-strong)] hover:text-[var(--ui-text)]">{example}</button>
-                    ))}
+                    {copy.examples.map((defaultExample, index) => {
+                      const example = knowledgeCategory !== null && index === 1
+                        ? (isChinese ? '比较当前分类文献中常见的方法路线' : 'Compare common methods in this category')
+                        : defaultExample
+                      return (
+                        <button key={example} onClick={() => setQuestion(example)} className="rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] px-3 py-3 text-left text-xs leading-5 text-[var(--ui-text-soft)] transition hover:border-[var(--ui-border-strong)] hover:text-[var(--ui-text)]">{example}</button>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -595,6 +602,13 @@ function AgentTrace({ result, copy, isChinese, onRetry, retryDisabled }: { resul
   const helpSource = isModelHelp ? copy.productHelpModelSource
     : isHelpFallback ? copy.productHelpFallbackSource : copy.productHelpSource
   const verificationStatus = result.verification_status || (result.grounded ? 'verified' : 'not_applicable')
+  const pdfCitations = result.citations.filter((citation) => citation.source === 'paper')
+  const pdfPages = [...new Set(pdfCitations.map((citation) => citation.page).filter((page): page is number => typeof page === 'number' && page > 0))].sort((a, b) => a - b)
+  const sourceNames = [...new Set(result.citations.map((citation) => citation.source))].map((source) => (
+    source === 'paper' ? (isChinese ? 'PDF 原文' : 'PDF text')
+      : source === 'knowledge' ? (isChinese ? '知识笔记' : 'Knowledge notes')
+        : (isChinese ? 'Zotero 条目信息' : 'Zotero item metadata')
+  ))
   const statusLabel = result.fallback_used
     ? result.fallback_reason === 'citation_verification'
       ? (isChinese ? '引用未通过 · 原文证据摘录' : 'Citation check failed · source excerpts')
@@ -616,7 +630,7 @@ function AgentTrace({ result, copy, isChinese, onRetry, retryDisabled }: { resul
   return (
     <div className="mt-3 space-y-3 rounded-2xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-3 text-xs text-[var(--ui-text-soft)]">
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 font-semibold ${isProductHelp ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400' : statusStyle}`}>
+        <span title={isProductHelp ? undefined : copy.verificationHint} className={`inline-flex items-center gap-1 rounded-full px-2 py-1 font-semibold ${isProductHelp ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400' : statusStyle}`}>
           {isProductHelp ? <Bot className="h-3.5 w-3.5" /> : verificationStatus === 'verified' ? <ShieldCheck className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
           {isProductHelp ? helpLabel : statusLabel}
         </span>
@@ -635,6 +649,16 @@ function AgentTrace({ result, copy, isChinese, onRetry, retryDisabled }: { resul
             ? (isChinese ? '未知（未收到或未记录服务商用量）' : 'Unknown (provider usage not received or recorded)')
             : (isChinese ? '无用量记录' : 'No usage record')}</span>
       </div>
+      {!isProductHelp && result.citations.length > 0 && (
+        <p title={result.tool_steps.find((step) => step.tool === 'paper_fulltext_search')?.detail}>
+          {isChinese ? '本次引用来源：' : 'Sources cited: '}{sourceNames.join(isChinese ? '、' : ', ')}
+          {pdfCitations.length > 0
+            ? pdfPages.length > 0
+              ? (isChinese ? `；PDF 第 ${pdfPages.join('、')} 页。` : `; PDF pages ${pdfPages.join(', ')}.`)
+              : (isChinese ? '；PDF 片段未记录页码。' : '; page numbers were not recorded for the PDF excerpts.')
+            : (isChinese ? '；未引用 PDF 原文。' : '; no PDF text was cited.')}
+        </p>
+      )}
       {isProductHelp && (
         <div className="space-y-1.5 leading-5">
           {isHelpFallback && modelAttempts.length === 0 && <p>{isChinese ? '未调用模型：没有模型尝试记录，请检查模型配置。' : 'Model not called: no model attempt was recorded. Check your model configuration.'}</p>}
@@ -673,7 +697,7 @@ function AgentTrace({ result, copy, isChinese, onRetry, retryDisabled }: { resul
         <div className="flex flex-wrap gap-2">
           {result.tool_steps.map((step) => (
             <span key={step.tool} title={step.detail} className="rounded-lg border border-[var(--ui-border)] bg-[var(--ui-surface-soft)] px-2 py-1.5">
-              {step.tool} · {step.status}{step.count ? ` · ${step.count}` : ''}
+              {step.tool} · {step.status}{typeof step.count === 'number' ? ` · ${step.count}` : ''}
             </span>
           ))}
         </div>
@@ -696,7 +720,10 @@ function AgentTrace({ result, copy, isChinese, onRetry, retryDisabled }: { resul
                   <span className="font-mono font-bold text-[var(--ui-accent)]">[{citation.id}]</span>
                   <div className="min-w-0 flex-1">
                     <p className="line-clamp-2 font-medium text-[var(--ui-text)]">{citation.title}</p>
-                    <p className="mt-1 uppercase tracking-wide text-[10px] text-[var(--ui-muted)]">{citation.source}</p>
+                    <p className="mt-1 text-[10px] text-[var(--ui-muted)]">{citation.source === 'paper'
+                      ? (isChinese ? 'PDF 原文' : 'PDF text')
+                      : citation.source === 'knowledge' ? (isChinese ? '知识笔记' : 'Knowledge notes')
+                        : (isChinese ? 'Zotero 条目信息' : 'Zotero item metadata')}</p>
                     {location && <p className="mt-1 text-[11px] text-[var(--ui-text-soft)]">{location}</p>}
                   </div>
                   {safeUrl && <a href={safeUrl} target="_blank" rel="noreferrer" aria-label={citation.title}><ExternalLink className="h-3.5 w-3.5" /></a>}

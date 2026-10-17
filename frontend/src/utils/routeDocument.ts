@@ -1,7 +1,13 @@
 import type { ResearchRoute } from '@/api/types'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { ArchitectureSvg, normalizeJsonLayers } from '@/components/AnalysisViz'
+
+const ARCHITECTURE_BLOCK = /<ARCH_JSON\b[^>]*>[\s\S]*?(?:<\/ARCH_JSON>|$)/gi
 
 export function cleanRouteMarkdown(text: string): string {
   return (text || '')
+    .replace(ARCHITECTURE_BLOCK, '')
     .replace(/#{1,6}\s*/g, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
@@ -34,10 +40,33 @@ function imageUrl(raw: string, origin: string): string | null {
   }
 }
 
-type ExportRoute = Pick<ResearchRoute, 'title' | 'status' | 'description' | 'ai_analysis'>
+type ExportRoute = Pick<ResearchRoute, 'title' | 'status' | 'description' | 'ai_analysis'> & {
+  architecture_json?: Parameters<typeof normalizeJsonLayers>[0]
+}
+
+function architectureMarkup(route: ExportRoute): string {
+  let architecture = normalizeJsonLayers(route.architecture_json)
+  if (!architecture) {
+    for (const match of (route.ai_analysis || '').matchAll(/<ARCH_JSON>\s*([\s\S]*?)\s*<\/ARCH_JSON>/gi)) {
+      // Only parse bounded JSON data; never accept supplied SVG/HTML markup.
+      if (match[1].length > 100_000) continue
+      try {
+        architecture = normalizeJsonLayers(JSON.parse(match[1]))
+        if (architecture) break
+      } catch { /* Invalid data falls back to the readable route text. */ }
+    }
+  }
+  if (!architecture) return ''
+  return `<section style="margin:20px 0;page-break-inside:avoid;">
+    <h2 style="font-size:18px;margin-bottom:8px;">研究结构图</h2>
+    <p style="color:#6b7280;font-size:12px;">依据架构数据确定性 SVG 绘制，非图像模型生成；结构规划仍需结合原文核验。</p>
+    ${renderToStaticMarkup(createElement(ArchitectureSvg, { ...architecture, fitContainer: true }))}
+  </section>`
+}
 
 export function buildRouteDocumentHtml(route: ExportRoute, origin: string): string {
-  const analysis = route.ai_analysis || ''
+  const architecture = architectureMarkup(route)
+  const analysis = (route.ai_analysis || '').replace(ARCHITECTURE_BLOCK, '')
   const textModel = analysis.match(/##\s*文字分析[（(]([^）)]+)[）)]/)?.[1] || ''
   const diagramModel = analysis.match(/##\s*研究架构图[（(]([^）)]+)[）)]/)?.[1] || ''
   const [textRaw, diagramRaw = ''] = analysis.split(/##\s*研究架构图/)
@@ -62,6 +91,7 @@ export function buildRouteDocumentHtml(route: ExportRoute, origin: string): stri
   ${desc || '<p style="color:#9ca3af;">无</p>'}
   <h2 style="font-size:18px;border-left:4px solid #4f46e5;padding-left:10px;margin:24px 0 8px;">AI 分析结果</h2>
   ${textClean}
+  ${architecture || '<p style="color:#6b7280;font-size:12px;">暂无可用的结构化架构数据，以下保留文字分析与路线说明，不推测补图。</p>'}
   ${imgTags}
   ${diagramText ? `<h2 style="font-size:18px;border-left:4px solid #7c3aed;padding-left:10px;margin:24px 0 8px;">研究架构图描述</h2>${diagramText}` : ''}
   <p style="margin-top:32px;padding-top:12px;border-top:1px solid #eee;color:#9ca3af;font-size:12px;">由 ScholarNova 生成 · 模型与检索依据见上</p>

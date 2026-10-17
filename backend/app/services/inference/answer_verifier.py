@@ -28,16 +28,25 @@ _HEADING = re.compile(
     r"retrieved evidence|note)\s*[:：]?$",
     re.IGNORECASE,
 )
-_META_PREFIXES = (
-    "回答模型暂时不可用",
+_SECTION_HEADING = re.compile(
+    r"^(?:原文(?:信息|事实)(?:[（(](?:严格依据材料|依据所给材料)[）)])?|"
+    r"教学(?:解释|说明)(?:[（(](?:非论文原文|非论文事实|不是论文原文|仅用于理解)[）)])?|"
+    r"source information(?: \(from supplied material\))?|"
+    r"teaching explanation(?: \(not paper findings\))?)\s*[:：]?$",
+    re.IGNORECASE,
+)
+# Only the application's exact non-factual notices are exempt. A generic
+# "说明："/"Note:" prefix must not hide teaching facts, numbers or source claims.
+_META_NOTICES = {
+    "回答模型暂时不可用，以下内容为检索到的原始证据",
     "以下内容为检索到的原始证据",
-    "这是检索结果而非模型归纳",
-    "说明：",
+    "说明：回答未通过引用完整性检查，以下为原始证据摘录",
+    "说明：这是检索结果而非模型归纳，请根据来源编号返回原文核验",
     "the answer model is temporarily unavailable",
     "the following items are retrieved evidence",
-    "these are retrieval results rather than a model synthesis",
-    "note:",
-)
+    "note: the answer did not pass citation checks; retrieved evidence follows",
+    "note: these are retrieval results rather than a model synthesis; verify them against the cited originals",
+}
 
 # 总结/列举/总览类问题标记：这类问题的回答职责是概括检索到的材料，
 # 未逐句引用属于正常现象，不应判为"引用校验失败"。
@@ -92,13 +101,15 @@ def _claim_segments(answer: str) -> list[str]:
     normalized = _TRAILING_CITATIONS.sub(r"\2\1", answer.replace("\r", ""))
     for raw_segment in _CLAIM_SPLIT.split(normalized):
         segment = _MARKUP_PREFIX.sub("", raw_segment.strip())
-        if not segment or _HEADING.fullmatch(segment):
+        heading = re.sub(r"\s+#+$", "", segment).strip("*_` ")
+        heading = re.sub(r"^[一二三四五六七八九十]+[、.)）]\s*", "", heading)
+        if not segment or _HEADING.fullmatch(heading) or _SECTION_HEADING.fullmatch(heading):
             continue
         plain = _CITATION.sub("", segment).strip(" ：:;；,.，。")
         if len(plain) < 8:
             continue
         lowered = plain.casefold()
-        if lowered.startswith(_META_PREFIXES):
+        if lowered in _META_NOTICES:
             continue
         claims.append(segment)
     return claims

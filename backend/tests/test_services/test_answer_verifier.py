@@ -1,8 +1,36 @@
 """Deterministic tests for FTI-3A answer verification."""
 
-from app.services.inference import build_retrieval_fallback, verify_answer_citations
 import pytest
 
+from app.services.inference import build_retrieval_fallback, verify_answer_citations
+
+
+@pytest.mark.parametrize("heading", [
+    "原文信息（严格依据材料）", "教学解释（非论文原文）",
+    "### 原文信息（严格依据材料）", "**教学解释（非论文事实）**",
+    "一、原文信息（严格依据材料）", "### 教学解释（非论文原文） ###",
+    "Source information (from supplied material)", "Teaching explanation (not paper findings)",
+])
+def test_pure_source_or_teaching_headings_do_not_create_uncited_claims(heading):
+    answer = f"{heading}\n论文中的实验保留独立的评价范围。[S1]\n当前材料需要按来源编号核对事实。[S1]"
+    result = verify_answer_citations(answer, ["S1"])
+    assert result.status == "verified"
+    assert result.claim_count == result.cited_claim_count == 2
+
+
+@pytest.mark.parametrize("uncited", [
+    "教学解释：该论文的MAE降低到14.36。",
+    "### 教学解释（MAE为14.36）",
+    "原文信息（已核对第8页）",
+    "教学解释（作者明确证明模型最优）",
+    "说明：教学解释证明该模型的MAE为14.36。",
+    "Note: teaching explanation confirms an error of 14.36.",
+    "Teaching explanation: the authors verified these results.",
+])
+def test_teaching_facts_numbers_and_source_claims_still_require_citations(uncited):
+    result = verify_answer_citations("论文描述了可核对的评价范围。[S1]\n" + uncited, ["S1"])
+    assert result.status != "verified"
+    assert result.claim_count == 2 and result.uncited_claim_count == 1
 
 @pytest.mark.parametrize("question", ["总结研究空白", "Summarize the evidence"])
 def test_multisentence_fallback_cites_each_segment(question):

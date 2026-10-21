@@ -90,6 +90,7 @@ function ResearchAssistantChat() {
   const [storageRetry, setStorageRetry] = useState(0)
   const legacyMigrationRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const latestMessageRef = useRef<HTMLElement>(null)
 
   useEffect(() => () => {
     pendingRequestRef.current?.abort()
@@ -245,9 +246,10 @@ function ResearchAssistantChat() {
   }, [isChinese])
 
   useEffect(() => {
-    if (messages.length > 0) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
+    if (!messages.length) return
+    if (messages[messages.length - 1].role === 'assistant') {
+      latestMessageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } else bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages])
 
   useEffect(() => {
@@ -565,7 +567,7 @@ function ResearchAssistantChat() {
               )}
 
               {messages.map((message, index) => (
-                <article key={message.id} className={message.role === 'user' ? 'ml-auto max-w-3xl' : 'mr-auto max-w-4xl'}>
+                <article ref={index === messages.length - 1 ? latestMessageRef : null} key={message.id} className={`scroll-mt-20 ${message.role === 'user' ? 'ml-auto max-w-3xl' : 'mr-auto max-w-4xl'}`}>
                   {(index === 0 || (messages[index - 1].scopeRevision ?? 0) !== (message.scopeRevision ?? 0)) && (
                     <p className="mb-2 text-xs text-[var(--ui-muted)]">
                       {copy.scopeLabel}: {message.knowledgeCategory ?? copy.allCategories}

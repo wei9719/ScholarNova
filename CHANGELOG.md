@@ -10,6 +10,7 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 - Keep unsaved-chat warnings and close/refresh protection active across page changes. Separate full local history from the existing six-message, current-evidence-scope model context. Migrate older chat history without the previous 40-message cut, and remove the legacy copy only after verifying the complete saved record.
 - Honor concise/no-template/no-exercise requests in multi-paper writing comparisons, with user output requirements separate from untrusted paper excerpts. Citation checks remain marker checks, not mathematical or factual verification.
 - Resolve short page/table follow-ups from earlier user questions, including after a failed turn; explicit new titles never inherit the old paper. Once a table is located, retrieve bounded same-paper, same-page context so definitions beside the caption are available without widening the evidence category.
+- Show a newly arrived Assistant answer from its beginning rather than scrolling past the prose to the bottom of long source traces; user-message submission still follows the pending response.
 
 ### 1.2.14 source — evidence retrieval and real workflow validation
 

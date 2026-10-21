@@ -230,6 +230,16 @@ it('renders a capability answer as product help without research-evidence warnin
   expectProductGuide()
 })
 
+it('scrolls a new answer to its beginning rather than hiding it below a long source trace', async () => {
+  render(<ResearchAssistant />)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '你可以做什么' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  expect(HTMLElement.prototype.scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'smooth', block: 'end' })
+
+  expect(await screen.findByText(productHelp.answer)).toBeInTheDocument()
+  expect(HTMLElement.prototype.scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'smooth', block: 'start' })
+})
+
 it('preserves product-help type and display when persisted history is rehydrated', async () => {
   useAssistantStore.getState().appendMessage('guide-chat', {
     id: 'guide-answer', role: 'assistant', content: productHelp.answer, result: productHelp,

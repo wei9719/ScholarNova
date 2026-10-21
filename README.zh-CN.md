@@ -12,7 +12,9 @@
 
 **当前版本 [1.2.14 已正式发布](https://github.com/wei9719/ScholarNova/releases/tag/v1.2.14)**，提供 Windows Setup/便携版，以及 Intel Mac、Apple Silicon Mac 的 DMG/ZIP。三个平台均通过原生构建与应用/后端启动检查。本轮重点修复指定论文页表定位、翻译与笔记取材、搜索匹配和 Zotero 重复导入，AI 润色改为原文先保存、草稿核对后采用。真实 GLM/Qwen、视觉及出图任务、安装后回放和未通过项见[本轮实测报告](docs/reports/v1.2.14-functional-validation.zh-CN.md)。数学教学、复杂解释和部分相关性仍需改善；学校订阅登录仍需用户授权与逐站点核验，不能以公开论文测试代替。
 
-**main 源码开发中，尚未发版**：已存笔记可继续同篇原文或新建当前分类对话；规划在合计 18,000 个 JSON 字符预算内选取九章笔记，并展示实际覆盖与截断。伴读避免当前工作区内重复追加，输出按用户要求组织，文字不再因“研究架构图”一词而被截去。已用真实 Qwen/GLM 串联阅读、保存、分类问答和研究路线，见[流程复验记录](docs/reports/research-workflow-validation-2026-10-17.zh-CN.md)。本轮补上对话保留与页表追问，见[10 月 21 日调试记录](docs/reports/chat-retention-followup-validation-2026-10-21.zh-CN.md)与[手册第 14 节](docs/USER_MANUAL.zh-CN.md#14-main源码开发中笔记与研究流程衔接未发版)。已发布和本机安装版仍为 **1.2.14**；隔离 Windows 试包不等于替换正式安装版或完成所有平台业务验收。
+**main 源码开发中，尚未公开发版**：已存笔记可继续同篇原文或新建当前分类对话；规划在合计 18,000 个 JSON 字符预算内选取九章笔记，并展示实际覆盖与截断。伴读避免当前工作区内重复追加，输出按用户要求组织，文字不再因“研究架构图”一词而被截去。已用真实 Qwen/GLM 串联阅读、保存、分类问答和研究路线，见[流程复验记录](docs/reports/research-workflow-validation-2026-10-17.zh-CN.md)。对话保留与页表追问见[10 月 21 日调试记录](docs/reports/chat-retention-followup-validation-2026-10-21.zh-CN.md)与[手册第 14 节](docs/USER_MANUAL.zh-CN.md#14-main源码开发中笔记与研究流程衔接未发版)。本机 Windows 已安装 **1.2.15 候选**；公开下载仍为 **1.2.14**，不把本机升级当作所有平台验收。
+
+**1.2.15 本轮验证**：句数、原文/教学标签和指定历史对象的输出检查与引用标记分别展示；数学伴读可本地重算 MAE/MSE/RMSE 小算例，区分模型声称值与计算值。真实 Qwen、原生升级资料保留和未通过项见[升级与质量回放](docs/reports/upgrade-math-output-validation-2026-10-21.zh-CN.md)。数值一致不等于数学推导正确，格式通过也不等于事实正确。
 
 ### 1.2.14 从哪里开始
 

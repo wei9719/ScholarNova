@@ -54,6 +54,16 @@ export interface ReadingResponse {
   fallback_used: boolean
   usage?: Record<string, unknown>
   model_attempts?: Array<Record<string, unknown>>
+  calculation_checks?: Array<{
+    metric: string
+    status: 'computed' | 'matched' | 'mismatch' | 'unsupported'
+    y_true: number[]
+    y_pred: number[]
+    mask: number[] | null
+    claimed_result: number | null
+    computed_result: number | null
+    detail: string
+  }>
 }
 export interface ReadingRequest {
   mode: ReadingMode

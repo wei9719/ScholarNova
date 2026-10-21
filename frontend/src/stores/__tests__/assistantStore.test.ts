@@ -305,6 +305,14 @@ describe('assistant workspace', () => {
     expect(restored.conversations[0].messages[0].result).not.toHaveProperty('model_attempts')
   })
 
+  it('preserves output diagnostics and failed attempts across reloads without changing the answer', () => {
+    const result = { ...oldResult, output_status: 'failed' as const, output_issues: ['要求两句，实际三句'], output_unchecked: ['语义仍需核对'] }
+    const message = { id: 'format-answer', role: 'assistant' as const, content: '模型实际回答', result, priorResults: [oldResult] }
+    useAssistantStore.getState().appendMessage('chat-a', message)
+    expect(createAssistantStore().getState().conversations[0].messages[0]).toEqual(message)
+    expect(isAssistantMessage(message)).toBe(true)
+  })
+
   it('does not allow extra persisted properties to replace store actions', () => {
     const previous = JSON.parse(localStorage.getItem(storageKey)!)
     previous.state.appendMessage = 'not a function'
@@ -330,6 +338,9 @@ describe('assistant workspace', () => {
     { result: { ...oldResult, model_attempts: [{ provider: 'test', model: { unsafe: 'object' }, status: 'completed' }] } },
     { result: { ...oldResult, invalid_citation_ids: 'S1' } },
     { result: { ...oldResult, total_tokens: { unsafe: 'object' } } },
+    { result: { ...oldResult, output_status: 'verified_math' } },
+    { result: { ...oldResult, output_issues: '不是列表' } },
+    { result: { ...oldResult, output_unchecked: [null] } },
     { priorResults: {} },
   ])('protects records with malformed answer traces rather than loading a crashing message: %j', (trace) => {
     const previous = JSON.parse(localStorage.getItem(storageKey)!)

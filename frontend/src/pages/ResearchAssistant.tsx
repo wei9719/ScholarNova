@@ -731,6 +731,18 @@ function AgentTrace({ result, copy, isChinese, onRetry, retryDisabled }: { resul
             ? (isChinese ? '未知（未收到或未记录服务商用量）' : 'Unknown (provider usage not received or recorded)')
             : (isChinese ? '无用量记录' : 'No usage record')}</span>
       </div>
+      {!isProductHelp && result.output_status && result.output_status !== 'not_applicable' && (
+        <div role={result.output_status === 'failed' ? 'alert' : 'status'} className={`rounded-lg border px-2.5 py-2 leading-5 ${result.output_status === 'failed' ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300' : 'border-[var(--ui-border)]'}`}>
+          <p className="font-semibold">{result.output_status === 'failed'
+            ? (isChinese ? '输出要求未满足' : 'Output requirements not met')
+            : result.output_status === 'passed'
+              ? (isChinese ? '已检查的输出要求已满足' : 'Checked output requirements met')
+              : (isChinese ? '输出要求尚未自动核验' : 'Output requirements not automatically checked')}</p>
+          {result.output_issues?.map((issue, index) => <p key={`issue-${index}`}>{issue}</p>)}
+          {result.output_unchecked?.map((issue, index) => <p key={`unchecked-${index}`}>{isChinese ? '未核验：' : 'Not checked: '}{issue}</p>)}
+          <p className="mt-1 text-[var(--ui-muted)]">{isChinese ? '仅检查已识别的句数、分栏或禁复述要求，不代表事实、公式或推导正确。' : 'Checks recognized sentence, section and repetition requirements only, not facts, formulas or proofs.'}</p>
+        </div>
+      )}
       {!isProductHelp && result.citations.length > 0 && (
         <p title={result.tool_steps.find((step) => step.tool === 'paper_fulltext_search')?.detail}>
           {isChinese ? '本次引用来源：' : 'Sources cited: '}{sourceNames.join(isChinese ? '、' : ', ')}

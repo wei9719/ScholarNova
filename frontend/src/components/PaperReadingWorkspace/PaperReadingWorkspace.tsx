@@ -76,6 +76,36 @@ const modes: Array<{
 ]
 const hasParts = (result: ReadingResponse) =>
   Boolean(result.source_notes || result.teaching_notes || result.exercise)
+const calculationScope =
+  '只对下列输入按给定指标作本地数值验算；不证明数据来自论文、指标选择、公式转录或推导正确。'
+const calculationText = (
+  check: NonNullable<ReadingResponse['calculation_checks']>[number],
+  zh = true,
+) => {
+  const labels = zh
+    ? {
+        computed: '已计算，未给声称结果',
+        matched: '数值一致（仅此算例）',
+        mismatch: '数值不一致',
+        unsupported: '无法验算',
+      }
+    : {
+        computed: 'Computed; no claimed value',
+        matched: 'Numeric match (this example only)',
+        mismatch: 'Numeric mismatch',
+        unsupported: 'Cannot check',
+      }
+  return [
+    `${check.metric.toUpperCase()} · ${labels[check.status]}`,
+    `${zh ? '真实值' : 'Actual'}: ${JSON.stringify(check.y_true)} · ${zh ? '预测值' : 'Predicted'}: ${JSON.stringify(check.y_pred)}`,
+    check.mask &&
+      `mask: ${JSON.stringify(check.mask)} (${zh ? '1 表示参与验算' : '1 means included'})`,
+    `${zh ? '模型声称' : 'Model claimed'}: ${check.claimed_result ?? '—'} · ${zh ? '本地计算' : 'Local result'}: ${check.computed_result ?? '—'}`,
+    check.detail,
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
 const outputText = (turn: ReadingTurn) =>
   [
     !hasParts(turn.result) && turn.result.answer,
@@ -84,6 +114,8 @@ const outputText = (turn: ReadingTurn) =>
     turn.result.teaching_notes &&
       `学习解释（AI 建议）\n${turn.result.teaching_notes}`,
     turn.result.exercise && `练习建议\n${turn.result.exercise}`,
+    Boolean(turn.result.calculation_checks?.length) &&
+      `基础算例数值验算（非数学证明）\n${calculationScope}\n${turn.result.calculation_checks!.map((check) => calculationText(check)).join('\n\n')}`,
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -1071,6 +1103,43 @@ export default function PaperReadingWorkspace({
                       {turn.result.exercise}
                     </div>
                   </>
+                )}
+                {Boolean(turn.result.calculation_checks?.length) && (
+                  <section
+                    aria-label={
+                      zh ? '基础算例数值验算' : 'Numeric example checks'
+                    }
+                  >
+                    <h3>
+                      {zh
+                        ? '基础算例数值验算（非数学证明）'
+                        : 'Numeric checks (not mathematical proof)'}
+                    </h3>
+                    <p className="reader-status">
+                      {zh
+                        ? calculationScope
+                        : 'Checks only these inputs for the specified metric, not paper provenance, metric selection, formula transcription or derivations.'}
+                    </p>
+                    {turn.result.calculation_checks?.map((check, index) => (
+                      <div
+                        key={index}
+                        role={
+                          check.status === 'mismatch' ||
+                          check.status === 'unsupported'
+                            ? 'alert'
+                            : undefined
+                        }
+                        className={
+                          check.status === 'mismatch' ||
+                          check.status === 'unsupported'
+                            ? 'reader-error reader-response-text'
+                            : 'reader-response-text'
+                        }
+                      >
+                        {calculationText(check, zh)}
+                      </div>
+                    ))}
+                  </section>
                 )}
                 <p className="reader-status">
                   {zh ? '材料范围' : 'Coverage'}: {turn.result.coverage} ·{' '}

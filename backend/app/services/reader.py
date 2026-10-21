@@ -26,6 +26,7 @@ from app.schemas.reader import (
 )
 from app.services.inference import AllModelsUnavailableError, chat_with_fallback
 from app.services.pdf.parser import PDFBusyError, run_pdf_work
+from app.services.reader_math import NUMERIC_SCOPE, calculation_notes, check_calculations
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,11 +53,23 @@ _MODE_GUIDANCE = {
     "explain": "用户未限制时，先用通俗语言解释原文，可用小例子帮助理解；明确例子不是作者的实验。",
     "math": (
         "结合当前页图像和所给文字解释实际可见的公式、符号、维度；区分作者推导与教学补充，模糊处明确说明。"
+        "数学任务的source_notes仅转录图像中逐字可辨的公式，以及本页文字明确给出的定义；"
+        "[P页码]只能支持这些实际可见、明文陈述的内容。看得清公式不等于本页已解释每个符号。"
+        "从常见数学约定、领域知识或公式形式推断的符号含义、整数取值、索引奇偶、维度和周期频率作用，"
+        "只要本页没有明文定义，就必须放在teaching_notes，并明确写‘本页未明文定义，以下为教学解释’。"
+        "不得将这类背景解释放入source_notes后挂原页引用，也不得把常识表述成作者明确定义。"
+        "先准确转录本次所问公式，再列本页对符号和维度的定义；公式或符号无法辨认时不要补猜、不要据此推导。"
         "先依据本页定义区分位置/时间步索引、特征/嵌入维度索引和维度大小，再解释每个下标；"
         "不能把嵌入维度的偶奇下标误称为偶奇位置索引，本页未定义的符号不猜测。"
         "区分理论目标和实际可训练、可评估的过程；本页未说明的实现步骤不补造。"
         "教学补充不得另造未经计算验证的新公式或代入结果，也不对原文未声明的线性性质下结论。"
         "纸笔练习可以提题，但不输出未验算的答案。"
+        "仅在用户需要且教学确实使用MAE/MSE/RMSE数值例子时，可另给calculation_checks数组（最多3项），"
+        "每项为metric（小写mae/mse/rmse）、y_true和y_pred数值数组（等长、最多50项）、"
+        "可选mask（等长整数0/1，1表示参与）和可选claimed_result数值。"
+        "MAE平均绝对差、MSE平均平方差、RMSE平方差均值开根，不能混用标签或把同一数值例子称为不同指标。"
+        "本地将另行验算这些结构化输入；不要在正文声称已经验算或推导已证明。"
+        "不要为了验算强加数值例子，用户不要例子或教学时calculation_checks必须为空数组。"
     ),
     "figure": (
         "只解读用户指定的当前页中可见的图表，结合附近文字说明坐标、图例与关系；读不清的数值不猜测。"
@@ -345,10 +358,24 @@ async def assist_page(paper_id: str, title: str, request: ReaderAssistRequest,
         structured = False
     if not structured:
         warnings.append("模型返回未满足原文/教学分栏格式，已作为未核验教学草稿展示；请勿将其直接保存为论文事实")
+    calculations = check_calculations(result.content) if request.mode == "math" and structured else []
+    if calculations and re.search(
+        r"不(?:需要|要|用|给|提供|添加|增加|附加|输出).{0,8}(?:例子|算例|教学|举例)"
+        r"|\b(?:no|without)\s+(?:extra\s+)?(?:examples?|teaching)\b"
+        r"|\bdo\s+not\s+(?:add|give|include)\s+(?:any\s+)?examples?\b",
+        request.question, re.I,
+    ):
+        # A stray optional model field must not override an explicit no-examples request.
+        calculations = []
+    if calculations:
+        warnings.append(NUMERIC_SCOPE)
+    if any(check.status in {"mismatch", "unsupported"} for check in calculations):
+        warnings.append("数值例子存在不一致或无法验算的输入，请先核对验算结果，不要直接采用模型的计算结论。")
     answer = "\n\n".join(part for part in (
         f"### {'原文译文' if translating else '原文说明'}\n{source_notes}" if source_notes else "",
         f"### 教学补充\n{teaching_notes}" if teaching_notes else "",
         f"### 纸笔与自测\n{exercise}" if exercise else "",
+        f"### 基础算例数值验算（非数学证明）\n{calculation_notes(calculations)}" if calculations else "",
     ) if part)
     return ReaderAssistResponse(
         answer=answer, source_notes=source_notes, teaching_notes=teaching_notes, exercise=exercise,
@@ -357,6 +384,7 @@ async def assist_page(paper_id: str, title: str, request: ReaderAssistRequest,
         total_tokens=result.usage.get("total_tokens", 0), usage=result.usage,
         model_attempts=[attempt.to_dict() for attempt in result.attempts],
         fallback_used=result.fallback_used,
+        calculation_checks=calculations,
     )
 
 

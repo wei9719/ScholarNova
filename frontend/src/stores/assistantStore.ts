@@ -102,6 +102,8 @@ function validResult(value: unknown): boolean {
     && optionalFields(value, ['response_type', 'retrieval_mode', 'inference_mode', 'verification_status', 'model_route', 'created_at'], (field) => typeof field === 'string')
     && optionalFields(value, ['prompt_tokens', 'completion_tokens', 'retrieval_tokens', 'total_tokens', 'citation_coverage', 'uncited_claim_count'], isNumber)
     && optionalFields(value, ['fallback_used', 'model_fallback_used', 'grounded'], (field) => typeof field === 'boolean')
+    && optionalFields(value, ['output_status'], (field) => typeof field === 'string' && ['passed', 'failed', 'not_checked', 'not_applicable'].includes(field))
+    && optionalFields(value, ['output_issues', 'output_unchecked'], (field) => Array.isArray(field) && field.every((item) => typeof item === 'string'))
     && (value.invalid_citation_ids === undefined || value.invalid_citation_ids === null
       || (Array.isArray(value.invalid_citation_ids) && value.invalid_citation_ids.every((id: unknown) => typeof id === 'string')))
 }

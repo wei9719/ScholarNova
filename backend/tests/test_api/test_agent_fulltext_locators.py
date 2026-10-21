@@ -1,5 +1,6 @@
 """Old PDFs and explicit page/table evidence must survive larger local libraries."""
 
+from dataclasses import replace
 from datetime import datetime
 from unittest.mock import AsyncMock
 
@@ -246,6 +247,19 @@ async def test_original_table_followup_reuses_user_paper_and_reaches_current_pdf
     client, db_session, offline_agent, repeat_after_failure,
 ):
     model, zotero, captured = offline_agent
+    original_answer = model.side_effect
+
+    async def answer_requested_two_sections(**kwargs):
+        # This test exercises locator continuity, not format-repair failures.
+        # The former one-sentence stub violates the user's explicit two-sentence
+        # request and correctly spends the shared repair budget in the new API.
+        result = await original_answer(**kwargs)
+        return replace(result, content=(
+            "原文信息：RM70% 与 CM70% 对应随机缺失和连续缺失。[S1]\n"
+            "教学解释：两者区别在于缺失位置随机分布还是时间上连续。[S2]"
+        ))
+
+    model.side_effect = answer_requested_two_sections
     await seed(db_session)
     history = list(STD_DATASET_HISTORY)
     if repeat_after_failure:
@@ -260,13 +274,19 @@ async def test_original_table_followup_reuses_user_paper_and_reaches_current_pdf
     body = response.json()
     assert response.status_code == 200
     assert body["inference_mode"] == "model" and body["total_tokens"] == 20
+    assert body["verification_status"] == "verified" and not body["output_issues"]
+    assert body["output_status"] == ("not_checked" if repeat_after_failure else "passed")
     paper_citations = [citation for citation in body["citations"] if citation["source"] == "paper"]
     assert paper_citations and {citation["item_id"] for citation in paper_citations} == {"std"}
     assert {citation["page"] for citation in paper_citations} == {8}
-    evidence = captured[0][-1]["content"].split("可引用材料：", 1)[1]
+    evidence = captured[0][-1]["content"].split("可引用材料：", 1)[1].split("[END_CURRENT_EVIDENCE]", 1)[0]
     assert "TABLE2_RAW" in evidence and "PAGE8_CONTEXT" in evidence
     assert "GAT_PAGE2" not in evidence and "PRIVATE_ONLY" not in evidence and "OTHER_PAGE" not in evidence
     assert "PEMS08" not in evidence  # The previous assistant answer is not PDF evidence.
+    if not repeat_after_failure:
+        # A forbidden historical value is a user output requirement, not PDF
+        # evidence; its location must stay outside the explicit source boundary.
+        assert "PEMS08" in captured[0][-1]["content"].split("[END_CURRENT_EVIDENCE]", 1)[1]
     assert STD_TABLE_FOLLOWUP in captured[0][-1]["content"]
     assert any(step["tool"] == "contextual_query" for step in body["tool_steps"])
     model.assert_awaited_once()

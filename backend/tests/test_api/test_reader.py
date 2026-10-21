@@ -349,6 +349,68 @@ async def test_visual_sends_only_requested_page_without_text_fallback(reader_cli
 
 
 @pytest.mark.asyncio
+async def test_math_numeric_examples_checked_locally_without_another_model_call(reader_client, local_paper, monkeypatch):
+    import app.services.reader as service
+
+    monkeypatch.setitem(service.MODEL_PROFILES, "vision", {"provider": "test", "model": "vision-test"})
+    result = _result()
+    payload = json.loads(result.content)
+    payload["calculation_checks"] = [{"metric": "mse", "y_true": [1, 4], "y_pred": [3, 1], "claimed_result": 2.5}]
+    result.content = json.dumps(payload)
+    chat = AsyncMock(return_value=result)
+    monkeypatch.setattr(service, "chat_with_fallback", chat)
+    response = await reader_client.post("/api/v1/reader/reader-paper/assist", json=_request(local_paper, mode="math"))
+    data = response.json()
+    assert response.status_code == 200
+    assert data["calculation_checks"][0]["status"] == "mismatch"
+    assert data["calculation_checks"][0]["computed_result"] == 6.5
+    assert "数值不一致" in data["answer"]
+    assert any("不证明数据来自论文" in warning for warning in data["warnings"])
+    assert any("数值例子存在不一致" in warning for warning in data["warnings"])
+    assert data["total_tokens"] == 81
+    assert data["source_notes"] == payload["source_notes"]
+    assert data["model_completed"] is True  # Returned format is not a mathematical correctness badge.
+    chat.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,question", [("explain", "解释掩码"), ("math", "只说明本页定义，不要例子与练习")])
+async def test_optional_checks_do_not_expand_non_math_or_no_example_requests(reader_client, local_paper, monkeypatch, mode, question):
+    import app.services.reader as service
+
+    monkeypatch.setitem(service.MODEL_PROFILES, "vision", {"provider": "test", "model": "vision-test"})
+    result = _result()
+    payload = json.loads(result.content)
+    payload["calculation_checks"] = [{"metric": "mae", "y_true": [1, 4], "y_pred": [3, 1]}]
+    result.content = json.dumps(payload)
+    monkeypatch.setattr(service, "chat_with_fallback", AsyncMock(return_value=result))
+    response = await reader_client.post("/api/v1/reader/reader-paper/assist", json=_request(local_paper, mode=mode, question=question))
+    assert response.status_code == 200 and response.json()["calculation_checks"] == []
+    assert "基础算例数值验算" not in response.json()["answer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["math", "figure", "explain", "translate", "prerequisite", "writing", "extension"])
+async def test_math_source_contract_does_not_treat_standard_conventions_as_page_definitions(reader_client, local_paper, monkeypatch, mode):
+    import app.services.reader as service
+
+    monkeypatch.setitem(service.MODEL_PROFILES, "vision", {"provider": "test", "model": "vision-test"})
+    chat = AsyncMock(return_value=_result())
+    monkeypatch.setattr(service, "chat_with_fallback", chat)
+    response = await reader_client.post("/api/v1/reader/reader-paper/assist", json=_request(local_paper, mode=mode))
+    assert response.status_code == 200
+    system = chat.call_args.kwargs["messages"][0]["content"]
+    boundary = "本页未明文定义，以下为教学解释"
+    if mode == "math":
+        assert boundary in system
+        assert "仅转录图像中逐字可辨的公式" in system
+        assert "看得清公式不等于本页已解释每个符号" in system
+        assert "不得把常识表述成作者明确定义" in system
+    else:
+        assert boundary not in system
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mode,required",
     [

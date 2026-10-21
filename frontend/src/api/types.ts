@@ -486,6 +486,9 @@ export interface AgentChatResponse {
   inference_mode: 'model' | 'deterministic_fallback' | 'none'
   fallback_reason?: 'model_unavailable' | 'citation_verification' | 'invalid_help_response' | null
   verification_status: 'verified' | 'partial' | 'failed' | 'not_applicable'
+  output_status?: 'passed' | 'failed' | 'not_checked' | 'not_applicable'
+  output_issues?: string[]
+  output_unchecked?: string[]
   citation_coverage: number
   uncited_claim_count: number
   invalid_citation_ids: string[]

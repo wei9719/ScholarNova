@@ -199,6 +199,28 @@ it('shows the exact cited PDF page without claiming complete-paper coverage', as
   expect(screen.queryByText(/完整论文已读取/)).not.toBeInTheDocument()
 })
 
+it('keeps output failure visible even when citation markers pass', async () => {
+  await renderSavedAnswer({
+    ...productHelp, response_type: 'research', grounded: true, verification_status: 'verified',
+    output_status: 'failed', output_issues: ['要求两句，实际三句'], output_unchecked: ['是否足够通俗需要读者判断'],
+  })
+  expect(screen.getByText('引用标记检查通过')).toBeInTheDocument()
+  expect(screen.getByRole('alert')).toHaveTextContent('输出要求未满足')
+  expect(screen.getByRole('alert')).toHaveTextContent('要求两句，实际三句')
+  expect(screen.getByRole('alert')).toHaveTextContent('未核验：是否足够通俗需要读者判断')
+  expect(screen.getByRole('alert')).toHaveTextContent('不代表事实、公式或推导正确')
+})
+
+it('labels checked output requirements without claiming comprehensive answer verification', async () => {
+  await renderSavedAnswer({
+    ...productHelp, response_type: 'research', output_status: 'passed', output_issues: [],
+    output_unchecked: ['是否完全没有复述含义尚未自动核验'],
+  })
+  expect(screen.getByText('已检查的输出要求已满足')).toBeInTheDocument()
+  expect(screen.getByText('未核验：是否完全没有复述含义尚未自动核验')).toBeInTheDocument()
+  expect(screen.getByText(/仅检查已识别的句数/)).toBeInTheDocument()
+})
+
 it('offers an in-category example instead of excluded Zotero when a category is selected', async () => {
   useAssistantStore.getState().setKnowledgeCategory('guide-chat', '交通')
   render(<ResearchAssistant />)

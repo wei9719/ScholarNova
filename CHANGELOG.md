@@ -4,6 +4,13 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.15 source — explicit output checks and bounded numerical examples
+
+- Check supported sentence counts, source/teaching labels and explicitly excluded prior object identifiers separately from citation markers. Share the existing single repair budget; do not silently cut answers or represent uncheckable requirements as passed.
+- Preserve output diagnostics in chat history and show unmet or uncheckable requirements independently of citation status. Keep historical records without the new optional fields compatible.
+- Recompute optional MAE/MSE/RMSE examples locally from bounded true/predicted arrays and explicit masks. Show the model claim, local result and mismatch; this is not validation of PDF transcription, metric choice, mathematical derivation or factual correctness.
+- Include numerical checks only in reviewed AI suggestions, not original paper material. Visual model timeouts remain visible and never silently downgrade an image request to text-only analysis.
+
 ### Main source — explicit chat retention and writing-response constraints
 
 - Remove silent count-based trimming of Assistant conversations and messages, preserving the existing v2 workspace format. Protect original records on read/parse failures, keep unsaved changes in memory on storage failures, and expose safe retry and complete chat JSON export rather than evicting older chats.

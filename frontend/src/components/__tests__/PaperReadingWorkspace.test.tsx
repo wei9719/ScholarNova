@@ -206,6 +206,60 @@ it('loads the exact page without invoking AI and captures a real text selection'
   expect(screen.getByText(/siliconflow\/Qwen\/test/)).toBeInTheDocument()
 })
 
+it('shows local numeric mismatches prominently and saves them as AI suggestions, not source facts', async () => {
+  mocks.assist.mockResolvedValue({
+    data: {
+      ...response,
+      exercise: '',
+      calculation_checks: [
+        {
+          metric: 'mse',
+          status: 'mismatch',
+          y_true: [1, 4],
+          y_pred: [3, 1],
+          mask: null,
+          claimed_result: 2.5,
+          computed_result: 6.5,
+          detail: 'MSE = 平方差之和 / 参与位置数，本例参与 2 个位置。',
+        },
+        {
+          metric: 'mae',
+          status: 'matched',
+          y_true: [1, 4],
+          y_pred: [3, 1],
+          mask: [1, 1],
+          claimed_result: 2.5,
+          computed_result: 2.5,
+          detail: 'MAE = 绝对差之和 / 参与位置数。',
+        },
+      ],
+    },
+  })
+  mount()
+  await ready()
+  fireEvent.click(screen.getByRole('button', { name: '解释公式' }))
+  fireEvent.click(screen.getByRole('button', { name: '开始本次伴读' }))
+  const checks = await screen.findByRole('region', {
+    name: '基础算例数值验算',
+  })
+  expect(within(checks).getByRole('alert')).toHaveTextContent(
+    'MSE · 数值不一致',
+  )
+  expect(within(checks).getByRole('alert')).toHaveTextContent('本地计算: 6.5')
+  expect(
+    within(checks).getByText(/MAE · 数值一致（仅此算例）/),
+  ).toBeInTheDocument()
+  expect(within(checks).getByText(/不证明数据来自论文/)).toBeInTheDocument()
+  expect(lastForm().open).toBe(false)
+  reviewNote()
+  await waitFor(() => expect(lastForm().open).toBe(true))
+  const entry = lastForm().prefill.card_data.sections.math
+  expect(entry.ai_suggestions).toContain('数值不一致')
+  expect(entry.ai_suggestions).toContain('本地计算: 6.5')
+  expect(entry.ai_suggestions).toContain('不证明数据来自论文')
+  expect(entry.paper_notes).not.toContain('本地计算')
+})
+
 it('translates the current page without a selection and sends visual requests with their explicit page', async () => {
   mount()
   await ready()

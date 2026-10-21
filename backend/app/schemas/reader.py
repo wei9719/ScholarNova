@@ -89,6 +89,19 @@ class WritingSamplesRequest(BaseModel):
         return self
 
 
+class ReaderCalculationCheck(BaseModel):
+    """Local numeric check, never an endorsement of a paper's formula or proof."""
+
+    metric: str
+    status: Literal["computed", "matched", "mismatch", "unsupported"]
+    y_true: list[float] = Field(default_factory=list)
+    y_pred: list[float] = Field(default_factory=list)
+    mask: list[int] | None = None
+    claimed_result: float | None = None
+    computed_result: float | None = None
+    detail: str
+
+
 class ReaderAssistResponse(BaseModel):
     answer: str
     source_notes: str = ""
@@ -104,3 +117,4 @@ class ReaderAssistResponse(BaseModel):
     usage: dict[str, int] = Field(default_factory=dict)
     model_attempts: list[dict] = Field(default_factory=list)
     fallback_used: bool = False
+    calculation_checks: list[ReaderCalculationCheck] = Field(default_factory=list)

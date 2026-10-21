@@ -4,6 +4,13 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### Main source — explicit chat retention and writing-response constraints
+
+- Remove silent count-based trimming of Assistant conversations and messages, preserving the existing v2 workspace format. Protect original records on read/parse failures, keep unsaved changes in memory on storage failures, and expose safe retry and complete chat JSON export rather than evicting older chats.
+- Keep unsaved-chat warnings and close/refresh protection active across page changes. Separate full local history from the existing six-message, current-evidence-scope model context. Migrate older chat history without the previous 40-message cut, and remove the legacy copy only after verifying the complete saved record.
+- Honor concise/no-template/no-exercise requests in multi-paper writing comparisons, with user output requirements separate from untrusted paper excerpts. Citation checks remain marker checks, not mathematical or factual verification.
+- Resolve short page/table follow-ups from earlier user questions, including after a failed turn; explicit new titles never inherit the old paper. Once a table is located, retrieve bounded same-paper, same-page context so definitions beside the caption are available without widening the evidence category.
+
 ### 1.2.14 source — evidence retrieval and real workflow validation
 
 - Resolve named papers and explicit page/table references inside the selected knowledge category before the candidate cap. Preserve older PDFs, normalize compact labels and use fair, query-aware candidates for general retrieval; missing requested pages/tables do not fall back to unrelated notes or Zotero.

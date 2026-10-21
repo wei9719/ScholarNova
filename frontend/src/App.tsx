@@ -8,6 +8,7 @@ import Knowledge from './pages/Knowledge'
 import KnowledgeAnalysis from './pages/KnowledgeAnalysis'
 import RouteDetail from './pages/RouteDetail'
 import ResearchAssistant from './pages/ResearchAssistant'
+import AssistantStorageGuard from './components/AssistantStorageGuard'
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
           duration: 3000,
         }}
       />
+      <AssistantStorageGuard />
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Home />} />

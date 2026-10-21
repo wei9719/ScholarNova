@@ -135,6 +135,30 @@ def test_short_pronominal_questions_reuse_user_paper_topic_not_assistant_claims(
     assert agent._contextual_retrieval_query(switched, history) == switched
 
 
+@pytest.mark.parametrize("question", [
+    "那 Table 2 中 RM70% 和 CM70% 分别表示什么？只回答两句，区分原文与教学，不要重复上一问的数据集。",
+    "Table2中随机缺失是什么意思？", "那第八页表二中报告了什么？",
+    "那么 Page 8 Table II 的结果是什么？", "该表二说明了什么？",
+])
+def test_page_table_followups_keep_only_recent_user_topic(question):
+    history = [agent.AgentMessage(role="user", content="STD-PLM 的插补实验用了哪个数据集？"),
+               agent.AgentMessage(role="assistant", content="ASSISTANT_ONLY 99% [S99]")]
+    query = agent._contextual_retrieval_query(question, history)
+    assert query == f"{history[0].content}\n{question}"
+    assert "ASSISTANT_ONLY" not in query
+    assert agent._contextual_retrieval_query(question, []) == question
+    switched = "换个话题：" + question
+    assert agent._contextual_retrieval_query(switched, history) == switched
+
+
+def test_explicit_title_in_intermediate_history_stops_older_paper_inheritance():
+    current_paper = "这篇论文的《GATGPT: A Pretrained Model for Traffic》第2页说了什么？"
+    history = [agent.AgentMessage(role="user", content="STD-PLM 的插补实验用了哪个数据集？"),
+               agent.AgentMessage(role="user", content=current_paper)]
+    question = "那 Table 2 中给了什么结果？"
+    assert agent._contextual_retrieval_query(question, history) == f"{current_paper}\n{question}"
+
+
 @pytest.mark.asyncio
 async def test_research_followup_respects_disabled_sources(client, db_session, offline_retrieval):
     model, ranking, zotero = offline_retrieval

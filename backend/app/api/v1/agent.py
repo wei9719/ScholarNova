@@ -257,13 +257,18 @@ _RESEARCH_FOLLOWUP = re.compile(
     r"^(?:请问)?(?:那|那么|它|这个|这项|该方法|该数据)(?:的|是|有|能|用|为|还|属于|如何|怎么|是否)"
 )
 _TOPIC_SWITCH = re.compile(r"换个话题|换一个话题|另一个问题|现在讨论|改为研究|先不讨论|暂时不管")
+_LOCATOR_FOLLOWUP = re.compile(
+    r"^(?:(?:那|那么|这|该)\s*)?(?:table|tab\.?|表|第|page|p\.)(?![a-z])", re.I,
+)
 
 
 def _contextual_retrieval_query(question: str, history: Sequence[AgentMessage]) -> str:
     """Carry a user's topic into an elliptical follow-up, never past evidence."""
     def is_followup(text: str) -> bool:
-        return len(text) <= 160 and not _TOPIC_SWITCH.search(text) and bool(
-            _RESEARCH_FOLLOWUP.search(_normalize_help_question(text)) or _is_help_followup(text)
+        normalized = _normalize_help_question(text)
+        return len(text) <= 160 and not _TOPIC_SWITCH.search(text) and not has_paper_title_cue(text) and bool(
+            _RESEARCH_FOLLOWUP.search(normalized) or _is_help_followup(text)
+            or (parse_locator(text).explicit and _LOCATOR_FOLLOWUP.search(normalized))
         )
 
     if not is_followup(question):
@@ -634,6 +639,22 @@ async def _paper_candidates(
                 chunk.metadata.get("kind") != "table",
                 not table_caption_matches(chunk.content, locator.table), chunk.position,
             ))
+            if locator.page is None:
+                # The caption prefilter cannot contain ordinary definitions
+                # beside the table. Once located, read only those same PDF
+                # pages, never other papers/pages that happen to mention it.
+                hit_pages = {
+                    (chunk.metadata.get("paper_id"), chunk.metadata.get("page"))
+                    for chunk in hits if chunk.metadata.get("page") is not None
+                }
+                if hit_pages:
+                    context_rows = (await db.execute(select(PaperEntity, PaperChunk).join(
+                        PaperChunk, PaperChunk.paper_id == PaperEntity.id,
+                    ).where(scope, or_(*(
+                        (PaperChunk.paper_id == paper_id) & (PaperChunk.page == page)
+                        for paper_id, page in sorted(hit_pages)
+                    ))).order_by(PaperEntity.id, PaperChunk.position).limit(128))).all()
+                    chunks = [from_paper(paper, chunk) for paper, chunk in context_rows]
             pages = {chunk.metadata.get("page") for chunk in hits} - {None}
             chunks = hits + [chunk for chunk in chunks if chunk.chunk_id not in hit_ids
                              and (locator.page is not None or chunk.metadata.get("page") in pages)]

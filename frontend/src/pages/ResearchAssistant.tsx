@@ -5,6 +5,7 @@ import {
   BookMarked,
   CheckCircle2,
   Database,
+  Download,
   Eraser,
   ExternalLink,
   Folder,
@@ -20,7 +21,7 @@ import {
 } from 'lucide-react'
 import { agentApi, knowledgeApi, zoteroApi } from '@/api/client'
 import type { AgentChatResponse, AgentMessage } from '@/api/types'
-import { useAssistantStore, type AssistantMessage } from '@/stores/assistantStore'
+import { isAssistantMessage, useAssistantStore, type AssistantMessage } from '@/stores/assistantStore'
 import { useLocaleStore } from '@/stores/localeStore'
 import PaperReadingWorkspace from '@/components/PaperReadingWorkspace/PaperReadingWorkspace'
 
@@ -63,6 +64,10 @@ function ResearchAssistantChat() {
     replaceMessage,
     replaceMessages,
     clearConversation: clearStoredConversation,
+    storageIssue,
+    hasUnsavedChanges,
+    retryPersistence,
+    exportWorkspace,
   } = useAssistantStore()
   const activeConversation = conversations.find((item) => item.id === activeConversationId) || conversations[0]
   const messages = activeConversation?.messages || []
@@ -81,6 +86,9 @@ function ResearchAssistantChat() {
   const pendingRequestRef = useRef<AbortController | null>(null)
   const currentConversationPending = sending && pendingConversationRef.current === activeConversation?.id
   const [error, setError] = useState('')
+  const [legacyIssue, setLegacyIssue] = useState(false)
+  const [storageRetry, setStorageRetry] = useState(0)
+  const legacyMigrationRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => () => {
@@ -112,6 +120,13 @@ function ResearchAssistantChat() {
     deleteFolder: '删除文件夹（对话移至未分类）',
     deleteChat: '删除当前对话',
     contextNotice: '每个对话使用独立上下文',
+    storagePolicy: '对话保留在本设备，不按条数自动删除；模型仅接收当前资料范围最近 6 条消息。',
+    exportChats: '导出对话备份',
+    retryStorage: '重新检查保存',
+    storageBlocked: '本机对话记录需要检查，已暂停覆盖原始记录。请先导出备份，再重新检查保存；当前页的新内容可能尚未保存。',
+    storageUnsaved: '最新对话改动尚未保存，刷新或关闭可能丢失。请先导出备份，再重新检查保存；不会自动删除旧对话腾空间。',
+    legacyWarning: '旧版对话暂未完成迁移，原始记录已保留。请导出备份后重新检查保存。',
+    exportFailed: '对话备份下载失败，请保留本页并重试。',
     category: '知识库资料分类',
     allCategories: '全部资料（按启用来源）',
     categoryLoading: '正在读取知识库分类…',
@@ -178,6 +193,13 @@ function ResearchAssistantChat() {
     deleteFolder: 'Delete folder (chats move to Unfiled)',
     deleteChat: 'Delete current chat',
     contextNotice: 'Each chat has isolated context',
+    storagePolicy: 'Chats stay on this device without automatic count-based deletion. Only the latest 6 messages in the current evidence scope are sent to the model.',
+    exportChats: 'Export chat backup',
+    retryStorage: 'Check saving again',
+    storageBlocked: 'Local chat storage needs attention. Existing records are protected from overwrite; export a backup before retrying. Recent changes may not be saved.',
+    storageUnsaved: 'Recent chat changes are not saved and may be lost on refresh or close. Export a backup, then retry saving. Older chats will not be deleted to free space.',
+    legacyWarning: 'Older chat history has not finished migrating. The original record is preserved; export a backup before retrying.',
+    exportFailed: 'Could not download the chat backup. Keep this page open and try again.',
     category: 'Knowledge category',
     allCategories: 'All material (enabled sources)',
     categoryLoading: 'Loading knowledge categories…',
@@ -229,17 +251,61 @@ function ResearchAssistantChat() {
   }, [messages])
 
   useEffect(() => {
-    if (!activeConversation || activeConversation.messages.length > 0) return
+    if (!activeConversation || legacyMigrationRef.current) return
+    if (storageIssue?.kind === 'read' || storageIssue?.kind === 'invalid') return
     try {
-      const legacy = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
-      if (Array.isArray(legacy) && legacy.length > 0) {
-        replaceMessages(activeConversation.id, legacy.slice(-40) as AssistantMessage[])
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw === null) return
+      const legacy: unknown = JSON.parse(raw)
+      if (!Array.isArray(legacy) || !legacy.every(isAssistantMessage)
+        || new Set(legacy.map((message) => message.id)).size !== legacy.length) {
+        setLegacyIssue(true)
+        return
       }
-      localStorage.removeItem(STORAGE_KEY)
+      const containsLegacy = (items: AssistantMessage[]) => legacy.every((message) =>
+        items.some((item) => JSON.stringify(item) === JSON.stringify(message)))
+      const state = useAssistantStore.getState()
+      const existing = state.conversations.find((chat) => containsLegacy(chat.messages))
+      legacyMigrationRef.current = true
+      if (legacy.length && !existing) {
+        const target = activeConversation.messages.length ? createConversation() : activeConversation.id
+        replaceMessages(target, legacy as AssistantMessage[])
+      }
+      const latest = useAssistantStore.getState()
+      const saved = JSON.parse(localStorage.getItem('scholarnova-assistant-workspace-v2') || 'null')
+      if (!latest.storageIssue && !latest.hasUnsavedChanges
+        && saved?.state?.conversations?.some((chat: { messages: AssistantMessage[] }) => containsLegacy(chat.messages))) {
+        localStorage.removeItem(STORAGE_KEY)
+        setLegacyIssue(false)
+      } else setLegacyIssue(true)
     } catch {
-      localStorage.removeItem(STORAGE_KEY)
+      setLegacyIssue(true)
     }
-  }, [activeConversation?.id, replaceMessages])
+  }, [activeConversation?.id, createConversation, replaceMessages, storageIssue?.kind, storageRetry])
+
+  const retrySaving = () => {
+    retryPersistence()
+    legacyMigrationRef.current = false
+    setStorageRetry((value) => value + 1)
+  }
+
+  const downloadChats = () => {
+    try {
+      const snapshot = JSON.parse(exportWorkspace())
+      try {
+        const legacy = localStorage.getItem(STORAGE_KEY)
+        if (legacy !== null) snapshot.legacyWorkspace = { key: STORAGE_KEY, raw: legacy }
+      } catch { /* The in-memory snapshot remains available even if storage cannot be read. */ }
+      const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json;charset=utf-8' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `ScholarNova-chats-${new Date().toISOString().slice(0, 10)}.json`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      setError(copy.exportFailed)
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -388,6 +454,17 @@ function ResearchAssistantChat() {
           </div>
         </section>
 
+        {(storageIssue || hasUnsavedChanges || legacyIssue) && (
+          <div role="alert" className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-[var(--ui-text)]">
+            <p>{storageIssue?.kind === 'read' || storageIssue?.kind === 'invalid' ? copy.storageBlocked : hasUnsavedChanges || storageIssue ? copy.storageUnsaved : copy.legacyWarning}</p>
+            {isChinese && storageIssue && <p className="mt-1 text-xs">{storageIssue.message}</p>}
+            <div className="mt-2 flex flex-wrap gap-3">
+              <button onClick={downloadChats} className="font-semibold underline underline-offset-4">{copy.exportChats}</button>
+              <button onClick={retrySaving} className="font-semibold underline underline-offset-4">{copy.retryStorage}</button>
+            </div>
+          </div>
+        )}
+
         <section className="card mt-5 overflow-hidden">
           <div className="flex min-h-[560px] flex-col md:flex-row">
             <aside className="border-b border-[var(--ui-border)] bg-[var(--ui-surface-raised)] p-3 md:w-64 md:shrink-0 md:border-b-0 md:border-r">
@@ -401,6 +478,9 @@ function ResearchAssistantChat() {
                   <button title={copy.newChat} onClick={() => createConversation(activeConversation?.folderId || null)} className="rounded-lg p-2 text-[var(--ui-text-soft)] hover:bg-[var(--ui-accent-soft)] hover:text-[var(--ui-accent)]"><MessageSquarePlus className="h-4 w-4" /></button>
                 </div>
               </div>
+
+              <p className="mb-2 px-1 text-[10px] leading-5 text-[var(--ui-muted)]">{copy.storagePolicy}</p>
+              <button onClick={downloadChats} className="mb-3 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-[var(--ui-text-soft)] hover:bg-[var(--ui-accent-soft)]"><Download className="h-3.5 w-3.5" />{copy.exportChats}</button>
 
               {showFolderInput && (
                 <div className="mb-3 flex gap-1.5">

@@ -105,6 +105,8 @@ Open full-size screenshots without expanding long images on this page.
 
 **Session scope:** leaving Search clears its results, temporary analyses and note-category selection rather than keeping permanent search history. Recent queries live only in the current window session. Saved notes, knowledge and Assistant conversations are retained separately; unsaved forms are not automatically archived, and clearing UI state does not delete server-side file caches.
 
+**Chat storage fixes in main (unreleased):** remove the silent 80-conversation / 40-message trimming. Storage failures and conflicting window versions preserve the existing record, show a warning and offer a full chat backup before retrying. Unsaved-chat protection remains active on other pages. Model requests still use only the latest six messages in the current evidence scope. Previously trimmed history cannot be recreated; chat exports do not include PDF files or model credentials. See [manual section 14.5](docs/USER_MANUAL.zh-CN.md#145-对话保留保存失败与备份).
+
 ## Configuration and integrations
 
 - [Optional local text model setup (中文)](docs/local-model.zh-CN.md): an isolated runtime and model copy for Assistant only, not bundled weights or a fully offline workflow. Includes private configuration, resource limits, start/stop controls and rollback; real desktop acceptance must be verified separately.

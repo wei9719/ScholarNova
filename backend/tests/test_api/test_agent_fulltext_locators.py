@@ -232,6 +232,103 @@ async def test_pronominal_followup_keeps_named_pdf_scope(client, db_session, off
     assert any(step["tool"] == "contextual_query" for step in response.json()["tool_steps"])
 
 
+STD_DATASET_QUESTION = "STD-PLM 的插补实验用了哪个数据集？只回答一句，标注 PDF 页码来源，不要补充教学。"
+STD_TABLE_FOLLOWUP = "那 Table 2 中 RM70% 和 CM70% 分别表示什么？只回答两句，区分原文与教学，不要重复上一问的数据集。"
+STD_DATASET_HISTORY = [
+    {"role": "user", "content": STD_DATASET_QUESTION},
+    {"role": "assistant", "content": "STD-PLM 的插补实验使用了 PEMS08 数据集 [S2]。"},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_after_failure", [False, True])
+async def test_original_table_followup_reuses_user_paper_and_reaches_current_pdf(
+    client, db_session, offline_agent, repeat_after_failure,
+):
+    model, zotero, captured = offline_agent
+    await seed(db_session)
+    history = list(STD_DATASET_HISTORY)
+    if repeat_after_failure:
+        history.extend([
+            {"role": "user", "content": STD_TABLE_FOLLOWUP},
+            {"role": "assistant", "content": "尚未在当前资料范围定位到指定论文，无法核对所问原文或页表。"},
+        ])
+    response = await client.post("/api/v1/agent/chat", json={
+        "question": STD_TABLE_FOLLOWUP, "history": history,
+        "knowledge_category": SCOPE,
+    })
+    body = response.json()
+    assert response.status_code == 200
+    assert body["inference_mode"] == "model" and body["total_tokens"] == 20
+    paper_citations = [citation for citation in body["citations"] if citation["source"] == "paper"]
+    assert paper_citations and {citation["item_id"] for citation in paper_citations} == {"std"}
+    assert {citation["page"] for citation in paper_citations} == {8}
+    evidence = captured[0][-1]["content"].split("可引用材料：", 1)[1]
+    assert "TABLE2_RAW" in evidence and "PAGE8_CONTEXT" in evidence
+    assert "GAT_PAGE2" not in evidence and "PRIVATE_ONLY" not in evidence and "OTHER_PAGE" not in evidence
+    assert "PEMS08" not in evidence  # The previous assistant answer is not PDF evidence.
+    assert STD_TABLE_FOLLOWUP in captured[0][-1]["content"]
+    assert any(step["tool"] == "contextual_query" for step in body["tool_steps"])
+    model.assert_awaited_once()
+    zotero.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("history,category", [
+    ([], SCOPE),
+    ([STD_DATASET_HISTORY[1]], SCOPE),
+    (STD_DATASET_HISTORY, "另一个分类"),
+    (STD_DATASET_HISTORY, "没有这个分类"),
+])
+async def test_table_followup_requires_user_topic_and_current_category_permission(
+    client, db_session, offline_agent, history, category,
+):
+    model, zotero, _ = offline_agent
+    await seed(db_session)
+    response = await client.post("/api/v1/agent/chat", json={
+        "question": STD_TABLE_FOLLOWUP, "history": history, "knowledge_category": category,
+    })
+    body = response.json()
+    assert response.status_code == 200
+    assert body["citations"] == [] and body["inference_mode"] == "none"
+    model.assert_not_awaited()
+    zotero.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_named_table_target_overrides_previous_user_paper(
+    client, db_session, offline_agent,
+):
+    _, _, captured = offline_agent
+    await seed(db_session)
+    response = await client.post("/api/v1/agent/chat", json={
+        "question": "这篇论文的 GATGPT Table 2 中给出什么结果？",
+        "history": STD_DATASET_HISTORY, "knowledge_category": SCOPE,
+    })
+    assert response.status_code == 200
+    assert {citation["item_id"] for citation in response.json()["citations"] if citation["source"] == "paper"} == {"gat"}
+    evidence = captured[0][-1]["content"].split("可引用材料：", 1)[1]
+    assert "GAT_PAGE2" in evidence and "TABLE2_RAW" not in evidence
+    assert not any(step["tool"] == "contextual_query" for step in response.json()["tool_steps"])
+
+
+@pytest.mark.asyncio
+async def test_new_unavailable_explicit_title_never_reverts_to_previous_paper(
+    client, db_session, offline_agent,
+):
+    model, zotero, _ = offline_agent
+    await seed(db_session)
+    response = await client.post("/api/v1/agent/chat", json={
+        "question": "这篇论文的《AbsentGPT: A New Unavailable Paper》第8页Table2说了什么？",
+        "history": STD_DATASET_HISTORY, "knowledge_category": SCOPE,
+    })
+    body = response.json()
+    assert response.status_code == 200
+    assert body["citations"] == [] and body["inference_mode"] == "none"
+    model.assert_not_awaited()
+    zotero.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_chinese_protocol_comparison_selects_english_protocols_from_both_pdfs(client, db_session, offline_agent):
     _, _, captured = offline_agent

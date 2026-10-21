@@ -44,9 +44,12 @@ beforeEach(() => {
   mocks.categories.mockResolvedValue({ data: [{ name: '食品', count: 2 }, { name: '交通', count: 3 }] })
   HTMLElement.prototype.scrollIntoView = vi.fn()
   window.scrollTo = vi.fn()
+  useAssistantStore.persist.clearStorage()
   localStorage.clear()
   useAssistantStore.setState({
     folders: [],
+    storageIssue: null,
+    hasUnsavedChanges: false,
     conversations: [{
       id: 'guide-chat', folderId: null, title: '新对话', messages: [], createdAt: 1, updatedAt: 1,
     }],
@@ -54,7 +57,116 @@ beforeEach(() => {
   })
 })
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
+
+it('migrates all older messages and removes the old record only after the complete history is saved', async () => {
+  const messages = Array.from({ length: 46 }, (_, index) => ({
+    id: `legacy-${index}`, role: index % 2 ? 'assistant' : 'user', content: `旧消息 ${index}`,
+  }))
+  localStorage.setItem('scholarnova-research-assistant-v1', JSON.stringify(messages))
+  render(<ResearchAssistant />)
+
+  expect(await screen.findByText('旧消息 0')).toBeInTheDocument()
+  expect(screen.getByText('旧消息 45')).toBeInTheDocument()
+  expect(useAssistantStore.getState().conversations[0].messages).toEqual(messages)
+  const persisted = JSON.parse(localStorage.getItem('scholarnova-assistant-workspace-v2')!)
+  expect(persisted.state.conversations[0].messages).toEqual(messages)
+  expect(localStorage.getItem('scholarnova-research-assistant-v1')).toBeNull()
+  expect(mocks.chat).not.toHaveBeenCalled()
+})
+
+it('migrates older messages into a separate chat without replacing an existing conversation', async () => {
+  const original = { id: 'current', role: 'user' as const, content: '当前研究内容' }
+  useAssistantStore.getState().appendMessage('guide-chat', original)
+  const legacy = [{ id: 'older', role: 'assistant', content: '旧版研究内容' }]
+  localStorage.setItem('scholarnova-research-assistant-v1', JSON.stringify(legacy))
+  render(<ResearchAssistant />)
+
+  expect(await screen.findByText('旧版研究内容')).toBeInTheDocument()
+  expect(useAssistantStore.getState().conversations).toHaveLength(2)
+  expect(useAssistantStore.getState().conversations.find((chat) => chat.id === 'guide-chat')?.messages).toEqual([original])
+})
+
+it('protects legacy messages with damaged trace data instead of importing a crashing answer', async () => {
+  const raw = JSON.stringify([{ id: 'damaged', role: 'assistant', content: '正文仍需保留', result: {} }])
+  localStorage.setItem('scholarnova-research-assistant-v1', raw)
+  render(<ResearchAssistant />)
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('旧版对话暂未完成迁移')
+  expect(localStorage.getItem('scholarnova-research-assistant-v1')).toBe(raw)
+  expect(useAssistantStore.getState().conversations[0].messages).toEqual([])
+  expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+})
+
+it('keeps unreadable legacy records and includes the original text in a downloadable backup', async () => {
+  const raw = '{unfinished older record'
+  localStorage.setItem('scholarnova-research-assistant-v1', raw)
+  const createUrl = vi.fn().mockReturnValue('blob:chat-backup')
+  Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: createUrl })
+  Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: vi.fn() })
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  render(<ResearchAssistant />)
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('旧版对话暂未完成迁移')
+  fireEvent.click(screen.getAllByRole('button', { name: '导出对话备份' })[0])
+  expect(click).toHaveBeenCalledOnce()
+  expect(click.mock.instances[0].download).toMatch(/^ScholarNova-chats-.*\.json$/)
+  const blob = createUrl.mock.calls[0][0] as Blob
+  const text = await new Promise<string>((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.readAsText(blob)
+  })
+  expect(JSON.parse(text).legacyWorkspace).toEqual({ key: 'scholarnova-research-assistant-v1', raw })
+  expect(localStorage.getItem('scholarnova-research-assistant-v1')).toBe(raw)
+  expect(mocks.chat).not.toHaveBeenCalled()
+})
+
+it('keeps failed migration in memory and in the old record, then safely retries without duplicating it', async () => {
+  const raw = JSON.stringify([{ id: 'older', role: 'user', content: '保留旧消息' }])
+  localStorage.setItem('scholarnova-research-assistant-v1', raw)
+  const saved = localStorage.getItem('scholarnova-assistant-workspace-v2')
+  const originalSet = Storage.prototype.setItem
+  const quota = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+    if (key === 'scholarnova-assistant-workspace-v2') throw new DOMException('full', 'QuotaExceededError')
+    return originalSet.call(this, key, value)
+  })
+  render(<ResearchAssistant />)
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('最新对话改动尚未保存')
+  expect(screen.getByText('保留旧消息')).toBeInTheDocument()
+  expect(localStorage.getItem('scholarnova-research-assistant-v1')).toBe(raw)
+  expect(localStorage.getItem('scholarnova-assistant-workspace-v2')).toBe(saved)
+  quota.mockRestore()
+  fireEvent.click(screen.getByRole('button', { name: '重新检查保存' }))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(localStorage.getItem('scholarnova-research-assistant-v1')).toBeNull()
+  expect(useAssistantStore.getState().conversations).toHaveLength(1)
+  expect(useAssistantStore.getState().conversations[0].messages).toHaveLength(1)
+})
+
+it('continues a model request when browser saving fails and retries storage without calling AI again', async () => {
+  const persisted = localStorage.getItem('scholarnova-assistant-workspace-v2')
+  const quota = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('full', 'QuotaExceededError')
+  })
+  render(<ResearchAssistant />)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: '请介绍智能体' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+  expect(await screen.findByText(productHelp.answer)).toBeInTheDocument()
+  expect(screen.getByRole('alert')).toHaveTextContent('刷新或关闭可能丢失')
+  expect(useAssistantStore.getState().conversations[0].messages).toHaveLength(2)
+  expect(localStorage.getItem('scholarnova-assistant-workspace-v2')).toBe(persisted)
+  quota.mockRestore()
+  fireEvent.click(screen.getByRole('button', { name: '重新检查保存' }))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(mocks.chat).toHaveBeenCalledOnce()
+  expect(JSON.parse(localStorage.getItem('scholarnova-assistant-workspace-v2')!).state.conversations[0].messages).toHaveLength(2)
+})
 
 it('distinguishes checked citation markers from actually cited PDF text and shows zero PDF excerpts', async () => {
   const result: AgentChatResponse = {

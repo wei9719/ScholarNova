@@ -31,6 +31,7 @@ const categories = [{ name: '交通修复', count: 1 }, { name: '食品研究', 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useAssistantStore.persist.clearStorage()
   localStorage.clear()
   HTMLElement.prototype.scrollIntoView = vi.fn()
   useKnowledgeStore.setState({ items: [], total: 0, categories: [], selectedCategory: '交通修复',

@@ -260,6 +260,91 @@ it('shows local numeric mismatches prominently and saves them as AI suggestions,
   expect(entry.paper_notes).not.toContain('本地计算')
 })
 
+it('distinguishes page-text matched quotes from teaching attribution and keeps both in AI suggestions when saving', async () => {
+  const quote = 'A Markov chain has states and transitions. [P1]'
+  const detail = '1 条摘录在本次页面文字中连续匹配；1 条未匹配已移除。'
+  const teaching = '这是辅助教学算例，不是作者明文推导。'
+  mocks.assist.mockResolvedValue({ data: {
+    ...response, source_notes: quote, teaching_notes: teaching, exercise: '',
+    source_grounding: {
+      policy: 'verbatim_page_text', matched_quotes: 1, rejected_quotes: 1,
+      moved_source_notes: true, detail,
+    },
+  } })
+  mount()
+  await ready()
+  fireEvent.change(screen.getByLabelText('选中原文（PDF 第 1 页）'), {
+    target: { value: 'A Markov chain' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: '解释公式' }))
+  fireEvent.click(screen.getByRole('button', { name: '开始本次伴读' }))
+  await screen.findByRole('heading', { name: '原文摘录（本页文字匹配）' })
+  expect(screen.getByRole('heading', { name: '教学补充与未核实解读（非作者明文）' })).toBeInTheDocument()
+  const check = screen.getByRole('region', { name: '原文摘录匹配检查' })
+  expect(check).toHaveTextContent('匹配摘录: 1')
+  expect(check).toHaveTextContent('拒绝摘录: 1')
+  expect(check).toHaveTextContent(detail)
+  expect(check).toHaveTextContent('不核验解读归属、公式或推导正确性')
+  expect(screen.queryByText('解释归属已核验')).not.toBeInTheDocument()
+  reviewNote()
+  await waitFor(() => expect(lastForm().open).toBe(true))
+  const entry = lastForm().prefill.card_data.sections.math
+  expect(entry.paper_notes).toContain('A Markov chain')
+  expect(entry.paper_notes).not.toContain('has states and transitions')
+  expect(entry.paper_notes).not.toContain(teaching)
+  expect(entry.paper_notes).not.toContain('本页文字匹配')
+  expect(entry.ai_suggestions).toContain('原文摘录（本页文字匹配）')
+  expect(entry.ai_suggestions).toContain(quote)
+  expect(entry.ai_suggestions).toContain('教学补充与未核实解读（非作者明文）')
+  expect(entry.ai_suggestions).toContain(teaching)
+  expect(entry.ai_suggestions).toContain(detail)
+  expect(entry.ai_suggestions).toContain('匹配摘录: 1')
+  expect(entry.ai_suggestions).toContain('拒绝摘录: 1')
+})
+
+it('shows no matched source quote honestly without promoting teaching or source snapshots to paper notes', async () => {
+  const detail = '未取得可连续匹配的原文摘录，现有说明仅作为教学补充。'
+  mocks.assist.mockResolvedValue({ data: {
+    ...response, source_notes: '', exercise: '',
+    source_grounding: {
+      policy: 'verbatim_page_text', matched_quotes: 0, rejected_quotes: 2,
+      moved_source_notes: true, detail,
+    },
+  } })
+  mount()
+  await ready()
+  fireEvent.click(screen.getByRole('button', { name: '解释公式' }))
+  fireEvent.click(screen.getByRole('button', { name: '开始本次伴读' }))
+  const check = await screen.findByRole('region', { name: '原文摘录匹配检查' })
+  expect(check).toHaveTextContent(detail)
+  expect(screen.queryByRole('heading', { name: '原文摘录（本页文字匹配）' })).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '教学补充与未核实解读（非作者明文）' })).toBeInTheDocument()
+  reviewNote()
+  await waitFor(() => expect(lastForm().open).toBe(true))
+  const entry = lastForm().prefill.card_data.sections.math
+  expect(entry.paper_notes).toBe('')
+  expect(entry.ai_suggestions).toContain(detail)
+  expect(entry.ai_suggestions).toContain('匹配摘录: 0')
+  expect(entry.ai_suggestions).toContain(response.teaching_notes)
+})
+
+it.each([undefined, null])('keeps legacy source/teaching labels without inventing quote checks when grounding is %s', async (grounding) => {
+  mocks.assist.mockResolvedValue({ data: { ...response, source_grounding: grounding } })
+  mount()
+  await ready()
+  fireEvent.click(screen.getByRole('button', { name: '开始本次伴读' }))
+  await screen.findByText(response.source_notes)
+  expect(screen.getByRole('heading', { name: '原文相关说明（AI 归纳，需核对）' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '通俗解释与学习建议' })).toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: '原文摘录匹配检查' })).not.toBeInTheDocument()
+  reviewNote()
+  await waitFor(() => expect(lastForm().open).toBe(true))
+  const entry = lastForm().prefill.card_data.sections.overview
+  expect(entry.ai_suggestions).toContain('原文相关说明（AI 归纳，需核对）')
+  expect(entry.ai_suggestions).not.toContain('本页文字匹配')
+  expect(entry.ai_suggestions).not.toContain('匹配摘录:')
+})
+
 it('translates the current page without a selection and sends visual requests with their explicit page', async () => {
   mount()
   await ready()

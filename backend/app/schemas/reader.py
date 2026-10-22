@@ -102,6 +102,16 @@ class ReaderCalculationCheck(BaseModel):
     detail: str
 
 
+class ReaderSourceGrounding(BaseModel):
+    """Exact page-text matching, not validation of a mathematical interpretation."""
+
+    policy: Literal["verbatim_page_text"] = "verbatim_page_text"
+    matched_quotes: int = 0
+    rejected_quotes: int = 0
+    moved_source_notes: bool = False
+    detail: str
+
+
 class ReaderAssistResponse(BaseModel):
     answer: str
     source_notes: str = ""
@@ -118,3 +128,4 @@ class ReaderAssistResponse(BaseModel):
     model_attempts: list[dict] = Field(default_factory=list)
     fallback_used: bool = False
     calculation_checks: list[ReaderCalculationCheck] = Field(default_factory=list)
+    source_grounding: ReaderSourceGrounding | None = None

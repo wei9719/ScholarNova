@@ -54,6 +54,13 @@ export interface ReadingResponse {
   fallback_used: boolean
   usage?: Record<string, unknown>
   model_attempts?: Array<Record<string, unknown>>
+  source_grounding?: {
+    policy: 'verbatim_page_text'
+    matched_quotes: number
+    rejected_quotes: number
+    moved_source_notes: boolean
+    detail: string
+  } | null
   calculation_checks?: Array<{
     metric: string
     status: 'computed' | 'matched' | 'mismatch' | 'unsupported'

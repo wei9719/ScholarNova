@@ -78,6 +78,39 @@ const hasParts = (result: ReadingResponse) =>
   Boolean(result.source_notes || result.teaching_notes || result.exercise)
 const calculationScope =
   '只对下列输入按给定指标作本地数值验算；不证明数据来自论文、指标选择、公式转录或推导正确。'
+const sourceNotesTitle = (result: ReadingResponse, zh = true) =>
+  result.source_grounding
+    ? zh
+      ? '原文摘录（本页文字匹配）'
+      : 'Source quotations (page-text match)'
+    : zh
+      ? '原文相关说明（AI 归纳，需核对）'
+      : 'Source discussion (AI summary; verify)'
+const teachingNotesTitle = (result: ReadingResponse, zh = true) =>
+  result.source_grounding
+    ? zh
+      ? '教学补充与未核实解读（非作者明文）'
+      : 'Teaching and unverified interpretations (not explicit author statements)'
+    : zh
+      ? '通俗解释与学习建议'
+      : 'Explanation & study guidance'
+const sourceGroundingText = (
+  grounding: NonNullable<ReadingResponse['source_grounding']>,
+  zh = true,
+) =>
+  [
+    `${zh ? '匹配摘录' : 'Matched quotations'}: ${grounding.matched_quotes} · ${zh ? '拒绝摘录' : 'Rejected quotations'}: ${grounding.rejected_quotes}`,
+    grounding.detail,
+    grounding.moved_source_notes &&
+      (zh
+        ? '未核实的原文解读已放入教学补充。'
+        : 'Unverified source interpretations were moved to teaching guidance.'),
+    zh
+      ? '仅核对摘录是否在本次提供的页面文字中连续匹配，不核验解读归属、公式或推导正确性。'
+      : 'Checks only contiguous quotation matches in the supplied page text, not interpretation attribution, formulas or derivations.',
+  ]
+    .filter(Boolean)
+    .join('\n')
 const calculationText = (
   check: NonNullable<ReadingResponse['calculation_checks']>[number],
   zh = true,
@@ -110,10 +143,12 @@ const outputText = (turn: ReadingTurn) =>
   [
     !hasParts(turn.result) && turn.result.answer,
     turn.result.source_notes &&
-      `原文相关说明（AI 归纳，需核对）\n${turn.result.source_notes}`,
+      `${sourceNotesTitle(turn.result)}\n${turn.result.source_notes}`,
     turn.result.teaching_notes &&
-      `学习解释（AI 建议）\n${turn.result.teaching_notes}`,
+      `${turn.result.source_grounding ? teachingNotesTitle(turn.result) : '学习解释（AI 建议）'}\n${turn.result.teaching_notes}`,
     turn.result.exercise && `练习建议\n${turn.result.exercise}`,
+    turn.result.source_grounding &&
+      `原文摘录匹配检查\n${sourceGroundingText(turn.result.source_grounding)}`,
     Boolean(turn.result.calculation_checks?.length) &&
       `基础算例数值验算（非数学证明）\n${calculationScope}\n${turn.result.calculation_checks!.map((check) => calculationText(check)).join('\n\n')}`,
   ]
@@ -1074,11 +1109,7 @@ export default function PaperReadingWorkspace({
                 )}
                 {turn.result.source_notes && (
                   <>
-                    <h3>
-                      {zh
-                        ? '原文相关说明（AI 归纳，需核对）'
-                        : 'Source discussion (AI summary; verify)'}
-                    </h3>
+                    <h3>{sourceNotesTitle(turn.result, zh)}</h3>
                     <div className="reader-response-text">
                       {turn.result.source_notes}
                     </div>
@@ -1086,11 +1117,7 @@ export default function PaperReadingWorkspace({
                 )}
                 {turn.result.teaching_notes && (
                   <>
-                    <h3>
-                      {zh
-                        ? '通俗解释与学习建议'
-                        : 'Explanation & study guidance'}
-                    </h3>
+                    <h3>{teachingNotesTitle(turn.result, zh)}</h3>
                     <div className="reader-response-text">
                       {turn.result.teaching_notes}
                     </div>
@@ -1103,6 +1130,14 @@ export default function PaperReadingWorkspace({
                       {turn.result.exercise}
                     </div>
                   </>
+                )}
+                {turn.result.source_grounding && (
+                  <section aria-label={zh ? '原文摘录匹配检查' : 'Source quotation matching'}>
+                    <h3>{zh ? '原文摘录匹配检查' : 'Source quotation matching'}</h3>
+                    <div className="reader-response-text">
+                      {sourceGroundingText(turn.result.source_grounding, zh)}
+                    </div>
+                  </section>
                 )}
                 {Boolean(turn.result.calculation_checks?.length) && (
                   <section

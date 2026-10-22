@@ -4,6 +4,13 @@ All notable changes to ScholarNova are recorded here. The project follows semant
 
 ## [Unreleased]
 
+### 1.2.16 source — separate mathematical quotations from teaching
+
+- Rebuild the math reader's original-text lane only from bounded quotations continuously matched against the actual supplied PDF excerpt. Collapse whitespace only; never fold exponents, mathematical characters or word boundaries through NFKC.
+- Keep model-written interpretations, background knowledge, unverified quotations and visual formula transcriptions in teaching or explicitly unverified drafts, even if the model placed them in `source_notes` with a page marker. No extra model call is needed for this separation.
+- Display quotation-match counts and scope separately from numeric checks. Preserve these labels in reviewed AI suggestions without automatically promoting them to paper notes; older reader responses retain their previous unverified labels.
+- A text match establishes neither semantic support nor formula layout/correctness. Missing or rejected quotations do not establish that the paper omitted a definition. Other reading modes retain their existing behavior.
+
 ### 1.2.15 source — explicit output checks and bounded numerical examples
 
 - Check supported sentence counts, source/teaching labels and explicitly excluded prior object identifiers separately from citation markers. Share the existing single repair budget; do not silently cut answers or represent uncheckable requirements as passed.

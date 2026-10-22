@@ -368,7 +368,10 @@ async def test_math_numeric_examples_checked_locally_without_another_model_call(
     assert any("不证明数据来自论文" in warning for warning in data["warnings"])
     assert any("数值例子存在不一致" in warning for warning in data["warnings"])
     assert data["total_tokens"] == 81
-    assert data["source_notes"] == payload["source_notes"]
+    assert data["source_notes"] == ""
+    assert "本页讨论交通速度缺失" in data["teaching_notes"]
+    assert "[P2]" not in data["teaching_notes"]
+    assert data["source_grounding"]["moved_source_notes"] is True
     assert data["model_completed"] is True  # Returned format is not a mathematical correctness badge.
     chat.assert_awaited_once()
 
@@ -400,14 +403,75 @@ async def test_math_source_contract_does_not_treat_standard_conventions_as_page_
     response = await reader_client.post("/api/v1/reader/reader-paper/assist", json=_request(local_paper, mode=mode))
     assert response.status_code == 200
     system = chat.call_args.kwargs["messages"][0]["content"]
-    boundary = "本页未明文定义，以下为教学解释"
+    boundary = "未在本次材料中核实为作者明文，以下为教学补充"
     if mode == "math":
         assert boundary in system
-        assert "仅转录图像中逐字可辨的公式" in system
+        assert "source_notes必须为空" in system
+        assert "视觉转录，待对原页核对" in system
         assert "看得清公式不等于本页已解释每个符号" in system
         assert "不得把常识表述成作者明确定义" in system
     else:
         assert boundary not in system
+        assert response.json()["source_grounding"] is None
+
+
+@pytest.mark.asyncio
+async def test_math_rebuilds_original_from_quotes_not_model_explanation(reader_client, local_paper, monkeypatch):
+    import app.services.reader as service
+
+    monkeypatch.setitem(service.MODEL_PROFILES, "vision", {"provider": "test", "model": "vision-test"})
+    result = _result("作者规定掩码总是取3 [P2]。")
+    payload = json.loads(result.content)
+    payload["source_quotes"] = ["Missing traffic speed values use a binary mask.", "The mask always equals three."]
+    result.content = json.dumps(payload)
+    chat = AsyncMock(return_value=result)
+    monkeypatch.setattr(service, "chat_with_fallback", chat)
+    response = await reader_client.post("/api/v1/reader/reader-paper/assist", json=_request(local_paper, mode="math", selection=""))
+    data = response.json()
+    assert response.status_code == 200 and data["model_completed"] is True
+    assert data["source_notes"] == "「Missing traffic speed values use a binary mask.」 [P2]"
+    assert "取3" not in data["source_notes"] and "three" not in data["source_notes"]
+    assert "待核对的模型解读" in data["teaching_notes"]
+    assert "three" in data["teaching_notes"]
+    assert data["source_grounding"]["matched_quotes"] == 1
+    assert data["source_grounding"]["rejected_quotes"] == 1
+    assert "[P2]" not in data["teaching_notes"]
+    assert "原文摘录（本页文字匹配）" in data["answer"]
+    chat.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_math_quote_cannot_escape_selected_text(reader_client, local_paper, monkeypatch):
+    import app.services.reader as service
+
+    monkeypatch.setitem(service.MODEL_PROFILES, "vision", {"provider": "test", "model": "vision-test"})
+    result = _result()
+    result.content = json.dumps({"source_notes": "", "teaching_notes": "", "source_quotes": [
+        "Missing traffic speed values use a binary mask.",
+    ]})
+    monkeypatch.setattr(service, "chat_with_fallback", AsyncMock(return_value=result))
+    response = await reader_client.post("/api/v1/reader/reader-paper/assist", json=_request(local_paper, mode="math"))
+    data = response.json()
+    assert response.status_code == 200 and data["source_notes"] == ""
+    assert data["source_grounding"]["matched_quotes"] == 0
+    assert data["source_grounding"]["rejected_quotes"] == 1
+    assert "未在本次文字节选中匹配" in data["teaching_notes"]
+
+
+@pytest.mark.asyncio
+async def test_math_rejects_nfkc_altered_selection_before_model(monkeypatch):
+    from app.schemas.reader import ReaderAssistRequest
+    from app.services.reader import assist_page
+
+    chat = AsyncMock()
+    monkeypatch.setattr("app.services.reader.chat_with_fallback", chat)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        await assist_page("p", "T", ReaderAssistRequest(mode="math", page_number=1,
+            content_hash="a" * 64, selection="x2 is the squared error."),
+            {"text": "x² is the squared error.", "text_verified": True, "image": b"image"})
+    assert error.value.status_code == 422
+    chat.assert_not_called()
 
 
 @pytest.mark.asyncio
